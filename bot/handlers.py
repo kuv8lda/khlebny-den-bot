@@ -28,6 +28,10 @@ class CartCb(CallbackData, prefix="c"):
     item_id: int = 0
 
 
+class CheckoutCb(CallbackData, prefix="o"):
+    action: str  # start | skip | confirm | cancel
+
+
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -88,12 +92,29 @@ def render_cart(cart: cart_logic.Cart) -> tuple[str, InlineKeyboardMarkup | None
     total = cart_logic.format_rub(cart_logic.total_cents(cart))
     text = "\n".join([texts.CART_TITLE, "", *lines, "", texts.CART_TOTAL.format(total=total)])
     rows.append([_btn(texts.BTN_CLEAR, "clear")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=texts.BTN_CHECKOUT, callback_data=CheckoutCb(action="start").pack()
+            )
+        ]
+    )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _load_cart(state: FSMContext) -> cart_logic.Cart:
+async def load_cart(state: FSMContext) -> cart_logic.Cart:
     data = await state.get_data()
     return dict(data.get("cart", {}))
+
+
+async def reset_fsm(state: FSMContext, *, clear_cart: bool = False) -> None:
+    """Сбросить состояние и данные оформления. Корзина остаётся, если не просили очистить."""
+    data = await state.get_data()
+    data.pop("checkout", None)
+    if clear_cart:
+        data["cart"] = {}
+    await state.set_state(None)
+    await state.set_data(data)
 
 
 @router.message(Command("start"))
@@ -108,8 +129,8 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    # Сбрасываем состояние, данные (корзину) сохраняем. См. DECISIONS.md.
-    await state.set_state(None)
+    # Сбрасываем состояние и данные оформления, корзину сохраняем. См. DECISIONS.md.
+    await reset_fsm(state)
     await message.answer(texts.CANCELLED, reply_markup=main_keyboard())
 
 
@@ -122,13 +143,8 @@ async def cmd_menu(message: Message) -> None:
 @router.message(Command("cart"))
 @router.message(F.text == texts.BTN_CART)
 async def cmd_cart(message: Message, state: FSMContext) -> None:
-    text, markup = render_cart(await _load_cart(state))
+    text, markup = render_cart(await load_cart(state))
     await message.answer(text, reply_markup=markup)
-
-
-@router.message(F.text == texts.BTN_ORDERS)
-async def cmd_orders(message: Message) -> None:
-    await message.answer(texts.ORDERS_STUB)
 
 
 @router.callback_query(MenuCb.filter())
@@ -137,7 +153,7 @@ async def on_add(callback: CallbackQuery, callback_data: MenuCb, state: FSMConte
     if item is None:
         await callback.answer(texts.UNKNOWN_ITEM, show_alert=True)
         return
-    cart = await _load_cart(state)
+    cart = await load_cart(state)
     if not cart_logic.add_item(cart, item["id"]):
         await callback.answer(texts.QTY_MAX.format(max=cart_logic.MAX_QTY), show_alert=True)
         return
@@ -153,7 +169,7 @@ async def on_cart_action(
     if action == "noop":
         await callback.answer()
         return
-    cart = await _load_cart(state)
+    cart = await load_cart(state)
     item_id = callback_data.item_id
     if action in ("inc", "dec"):
         new_qty = cart.get(str(item_id), 0) + (1 if action == "inc" else -1)

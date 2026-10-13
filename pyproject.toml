@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["bot"]
+packages = ["khlebny_bot"]
 
 [tool.ruff]
 line-length = 100

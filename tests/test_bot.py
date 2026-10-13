@@ -1,32 +1,12 @@
-from unittest.mock import AsyncMock, MagicMock
+from aiogram.types import ReplyKeyboardMarkup
+from helpers import make_callback, make_message, make_state
 
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup
+from khlebny_bot import cart as cart_logic
+from khlebny_bot import handlers as h
+from khlebny_bot import texts
+from khlebny_bot.catalog import CATALOG, get_item
+from khlebny_bot.storage import SqliteStorage
 
-from bot import cart as cart_logic
-from bot import handlers as h
-from bot import texts
-from bot.catalog import CATALOG, get_item
-from bot.storage import SqliteStorage
-
-
-def make_state(storage=None) -> FSMContext:
-    key = StorageKey(bot_id=1, chat_id=1, user_id=1)
-    return FSMContext(storage=storage or MemoryStorage(), key=key)
-
-def make_message() -> MagicMock:
-    msg = MagicMock(spec=Message)
-    msg.answer = AsyncMock()
-    msg.edit_text = AsyncMock()
-    return msg
-
-def make_callback() -> MagicMock:
-    cb = MagicMock(spec=CallbackQuery)
-    cb.answer = AsyncMock()
-    cb.message = make_message()
-    return cb
 
 async def test_start_shows_buttons_and_demo_note():
     msg = make_message()

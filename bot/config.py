@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     bot_token: SecretStr
     log_level: str = "INFO"
     fsm_db_path: str = "data/fsm.sqlite3"
+    orders_db_path: str = ""  # пусто: заказы лежат в том же файле, что и FSM
+
+    @property
+    def orders_path(self) -> str:
+        return self.orders_db_path or self.fsm_db_path
 
 
 def get_settings() -> Settings:
