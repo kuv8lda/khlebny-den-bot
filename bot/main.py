@@ -5,8 +5,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
 from . import texts
-from .config import Settings
 from .checkout import router as checkout_router
+from .config import Settings
 from .handlers import router
 from .orders import OrdersRepo
 from .storage import SqliteStorage
