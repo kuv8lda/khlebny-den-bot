@@ -1,0 +1,214 @@
+# rtt index | generated 2026-10-15 15:05 | 17 files | 3010 tokens
+# If this looks outdated, ask the user to run: rtt update
+# khlebny_bot/__init__.py [python]
+
+# khlebny_bot/cart.py [python]
+imports: catalog
+def format_rub(cents: int) -> str  # 115000 -> '1 150 ₽'; 115050 -> '1 150,50 ₽'.
+def add_item(cart: Cart, item_id: int | str) -> bool
+def set_qty(cart: Cart, item_id: int | str, qty: int) -> bool
+def remove_item(cart: Cart, item_id: int | str) -> bool
+def clear(cart: Cart) -> None
+def total_cents(cart: Cart) -> int
+
+# khlebny_bot/catalog.py [python]
+def get_item(item_id: int | str) -> dict | None
+
+# khlebny_bot/checkout.py [python]
+imports: logging, uuid, collections.abc.Sequence, dataclasses.asdict, datetime.datetime, aiogram.F, aiogram.Router, aiogram.exceptions.TelegramBadRequest, aiogram.filters.callback_data.CallbackData, aiogram.fsm.context.FSMContext, aiogram.fsm.state.State, aiogram.fsm.state.StatesGroup, aiogram.types.CallbackQuery, aiogram.types.InlineKeyboardButton, aiogram.types.InlineKeyboardMarkup, aiogram.types.Message, catalog, handlers, orders
+class Checkout(StatesGroup)
+class OrderCb(CallbackData, prefix="v")
+def snapshot_cart(cart: cart_logic.Cart) -> list[OrderItem]  # Позиции корзины с названием и ценой на текущий момент.
+def format_dt(iso: str) -> str
+def _item_lines(items: Sequence[OrderItem]) -> list[str]
+def _total(items: Sequence[OrderItem]) -> str
+def render_confirm(
+    items: Sequence[OrderItem], name: str, comment: str
+) -> tuple[str, InlineKeyboardMarkup]
+def render_order(order: Order) -> str
+def _skip_keyboard() -> InlineKeyboardMarkup
+def _edit(callback: CallbackQuery, text: str) -> None  # Заменить текст сообщения с кнопками (кнопки при этом убираются).
+def cmd_orders(message: Message, orders: OrdersRepo) -> None
+def on_order_open(
+    callback: CallbackQuery, callback_data: OrderCb, orders: OrdersRepo
+) -> None
+def on_checkout_start(callback: CallbackQuery, state: FSMContext) -> None
+def on_name(message: Message, state: FSMContext) -> None
+def _to_confirm(message: Message, state: FSMContext, comment: str) -> None
+def on_comment(message: Message, state: FSMContext) -> None
+def on_skip(callback: CallbackQuery, state: FSMContext) -> None
+def on_confirm(callback: CallbackQuery, state: FSMContext, orders: OrdersRepo) -> None
+def on_cancel_button(callback: CallbackQuery, state: FSMContext) -> None
+def on_checkout_stale(callback: CallbackQuery) -> None  # Кнопки старых сообщений, когда оформление уже не идёт.
+
+# khlebny_bot/config.py [python]
+imports: pydantic.SecretStr, pydantic.field_validator, pydantic_settings.BaseSettings, pydantic_settings.SettingsConfigDict
+class Settings(BaseSettings)
+  def _strip_trailing_slash(cls, value: str) -> str
+  def orders_path(self) -> str
+  def panel_enabled(self) -> bool
+def get_settings() -> Settings
+
+# khlebny_bot/handlers.py [python]
+imports: aiogram.F, aiogram.Router, aiogram.exceptions.TelegramBadRequest, aiogram.filters.Command, aiogram.filters.callback_data.CallbackData, aiogram.fsm.context.FSMContext, aiogram.types.CallbackQuery, aiogram.types.InlineKeyboardButton, aiogram.types.InlineKeyboardMarkup, aiogram.types.KeyboardButton, aiogram.types.Message, aiogram.types.ReplyKeyboardMarkup, catalog
+class MenuCb(CallbackData, prefix="m")
+class CartCb(CallbackData, prefix="c")
+class CheckoutCb(CallbackData, prefix="o")
+def main_keyboard() -> ReplyKeyboardMarkup
+def menu_keyboard() -> InlineKeyboardMarkup
+def _btn(text: str, action: str, item_id: int = 0) -> InlineKeyboardButton
+def render_cart(cart: cart_logic.Cart) -> tuple[str, InlineKeyboardMarkup | None]
+def load_cart(state: FSMContext) -> cart_logic.Cart
+def reset_fsm(state: FSMContext, *, clear_cart: bool = False) -> None  # Сбросить состояние и данные оформления. Корзина остаётся, если не просили очисти
+def cmd_start(message: Message) -> None
+def cmd_help(message: Message) -> None
+def cmd_cancel(message: Message, state: FSMContext) -> None
+def cmd_menu(message: Message) -> None
+def cmd_cart(message: Message, state: FSMContext) -> None
+def on_add(callback: CallbackQuery, callback_data: MenuCb, state: FSMContext) -> None
+def on_cart_action(
+    callback: CallbackQuery, callback_data: CartCb, state: FSMContext
+) -> None
+
+# khlebny_bot/main.py [python]
+imports: asyncio, logging, aiogram.Bot, aiogram.Dispatcher, aiogram.types.BotCommand, checkout, config, handlers, orders, storage
+def main() -> None
+
+# khlebny_bot/orders.py [python]
+imports: asyncio, sqlite3, threading, collections.abc.Sequence, dataclasses.dataclass, datetime.UTC, datetime.datetime, pathlib.Path
+class OrderItem
+class Order
+class OrdersRepo
+  def __init__(self, path: str | Path) -> None
+  def _items(self, order_id: int) -> tuple[OrderItem, ...]
+  def _create(
+        self, user_id: int, name: str, comment: str, items: Sequence[OrderItem], token: str
+    ) -> tuple[Order, bool]
+  def _list(self, user_id: int, limit: int) -> list[Order]
+  def _get(self, order_id: int, user_id: int) -> Order | None
+  def create(
+        self, user_id: int, name: str, comment: str, items: Sequence[OrderItem], token: str
+    ) -> tuple[Order, bool]  # Вернуть (заказ, создан_ли_сейчас). Тот же token даёт тот же заказ.
+  def list_for_user(self, user_id: int, limit: int = 5) -> list[Order]  # Последние заказы пользователя, новые первыми (без состава).
+  def get(self, order_id: int, user_id: int) -> Order | None  # Заказ с составом; чужой заказ не отдаётся.
+  def close(self) -> None
+
+# khlebny_bot/panel.py [python]
+imports: asyncio, logging, time, collections.abc.Callable, httpx, pydantic.BaseModel, pydantic.Field, pydantic.StrictInt, pydantic.TypeAdapter, pydantic.ValidationError, config
+class PanelError(Exception)
+class _CatalogItem(BaseModel)
+def parse_catalog(payload: object) -> list[dict]  # Разобрать голый массив. id остаётся int: строки вроде "1" не принимаются.
+class PanelClient
+  def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: float = 5,
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> None
+  def fetch_catalog(self) -> list[dict]
+  def aclose(self) -> None
+class CatalogProvider
+  def __init__(
+        self,
+        client: PanelClient | None,
+        fallback: list[dict],
+        ttl_seconds: float = 60,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None
+  def get(self) -> list[dict]
+  def aclose(self) -> None
+def build_catalog_provider(settings: Settings, fallback: list[dict]) -> CatalogProvider
+
+# khlebny_bot/storage.py [python]
+imports: asyncio, json, sqlite3, threading, collections.abc.Mapping, pathlib.Path, typing.Any, aiogram.fsm.state.State, aiogram.fsm.storage.base.BaseStorage, aiogram.fsm.storage.base.DefaultKeyBuilder, aiogram.fsm.storage.base.StateType, aiogram.fsm.storage.base.StorageKey
+class SqliteStorage(BaseStorage)
+  def __init__(self, path: str | Path) -> None
+  def _key(self, key: StorageKey) -> str
+  def _run(self, sql: str, params: tuple = (), fetch: bool = False)
+  def set_state(self, key: StorageKey, state: StateType = None) -> None
+  def get_state(self, key: StorageKey) -> str | None
+  def set_data(self, key: StorageKey, data: Mapping[str, Any]) -> None
+  def get_data(self, key: StorageKey) -> dict[str, Any]
+  def close(self) -> None
+
+# khlebny_bot/texts.py [python]
+
+# tests/__init__.py [python]
+
+# tests/helpers.py [python]
+imports: types.SimpleNamespace, unittest.mock.AsyncMock, unittest.mock.MagicMock, aiogram.fsm.context.FSMContext, aiogram.fsm.storage.base.StorageKey, aiogram.fsm.storage.memory.MemoryStorage, aiogram.types.CallbackQuery, aiogram.types.Message
+def make_state(storage=None, user_id: int = 1) -> FSMContext
+def make_message(text: str | None = None, user_id: int = 1) -> MagicMock
+def make_callback(user_id: int = 1) -> MagicMock
+
+# tests/test_bot.py [python]
+imports: aiogram.types.ReplyKeyboardMarkup, helpers.make_callback, helpers.make_message, helpers.make_state, khlebny_bot, khlebny_bot.texts, khlebny_bot.catalog.CATALOG, khlebny_bot.catalog.get_item, khlebny_bot.storage.SqliteStorage
+def test_start_shows_buttons_and_demo_note()
+def test_menu_has_nine_items_with_prices()
+def test_add_item_to_cart()
+def test_add_item_over_max_is_refused()
+def test_set_qty_range()
+def test_inc_dec_buttons_respect_range()
+def test_remove_and_clear()
+def test_total_in_cents_and_rub_format()
+def test_cart_text_shows_total()
+def test_cancel_clears_state_keeps_cart()
+def test_fsm_survives_restart(tmp_path)
+
+# tests/test_checkout.py [python]
+imports: pytest, helpers.make_callback, helpers.make_message, helpers.make_state, khlebny_bot, khlebny_bot.texts, khlebny_bot.catalog.CATALOG, khlebny_bot.checkout.Checkout, khlebny_bot.orders.OrderItem, khlebny_bot.orders.OrdersRepo, khlebny_bot.storage.SqliteStorage
+def orders(tmp_path)
+def go_to(step, state, cart=None)  # Довести оформление до шага: name | comment | confirm.
+def user_orders(orders, user_id=1)
+def test_cart_has_checkout_button_under_clear()
+def test_checkout_unavailable_for_empty_cart(cart)
+def test_full_path_creates_order_and_clears_cart(orders)
+def test_skip_comment(orders)
+def test_invalid_name_keeps_state(bad)
+def test_invalid_comment_keeps_state(bad)
+def test_limits_are_inclusive()
+def test_cancel_at_every_step(step, orders)
+def test_cancel_button_on_confirm_screen(orders)
+def test_order_total_matches_cart_total(orders)
+def test_catalog_change_does_not_touch_saved_order(orders, monkeypatch)
+def test_repeated_confirm_does_not_duplicate(orders)
+def test_confirm_button_outside_checkout_is_stale()
+def test_my_orders_empty(orders)
+def make_order(orders, user_id, token)
+def test_my_orders_lists_latest_five_newest_first(orders)
+def test_my_orders_only_own(orders)
+def test_open_order_shows_items_and_hides_foreign(orders)
+def test_checkout_state_and_orders_survive_restart(tmp_path)
+
+# tests/test_orders.py [python]
+imports: datetime.UTC, datetime.datetime, pytest, khlebny_bot.config.Settings, khlebny_bot.orders.OrderItem, khlebny_bot.orders.OrdersRepo
+def repo(tmp_path)
+def test_create_computes_total_in_cents_and_stores_items(repo)
+def test_same_token_returns_same_order(repo)
+def test_empty_order_is_rejected(repo)
+def test_get_hides_foreign_order(repo)
+def test_list_is_newest_first_and_limited(repo)
+def test_orders_path_falls_back_to_fsm_path()
+
+# tests/test_panel.py [python]
+imports: httpx, pytest, respx, khlebny_bot.catalog.CATALOG, khlebny_bot.config.Settings, khlebny_bot.panel.CatalogProvider, khlebny_bot.panel.PanelClient, khlebny_bot.panel.PanelError, khlebny_bot.panel.build_catalog_provider, khlebny_bot.panel.parse_catalog
+def client()
+def test_fetch_sends_bearer_and_parses_bare_array(client)
+def test_http_error_becomes_panel_error(client, status)
+def test_timeout_becomes_panel_error(client)
+def test_invalid_json_becomes_panel_error(client)
+def test_parse_rejects_bad_format(payload)
+def test_parse_empty_array_is_valid()
+class FakeClock
+  def __init__(self) -> None
+  def __call__(self) -> float
+def test_provider_caches_within_ttl_and_refetches_after(client)
+def test_provider_falls_back_when_panel_down(client)
+def test_provider_keeps_stale_cache_when_panel_goes_down(client)
+def test_provider_without_client_uses_fallback()
+def test_empty_key_disables_integration(key)
+def test_settings_defaults_and_trailing_slash()
+def test_api_key_not_in_repr()
