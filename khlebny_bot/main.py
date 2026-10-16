@@ -9,6 +9,7 @@ from .checkout import router as checkout_router
 from .config import Settings
 from .handlers import router
 from .orders import OrdersRepo
+from .panel import PanelClient
 from .storage import SqliteStorage
 
 
@@ -17,8 +18,15 @@ async def main() -> None:
     settings = Settings()
     storage = SqliteStorage(settings.fsm_db_path)
     orders = OrdersRepo(settings.orders_path)
+    panel_client: PanelClient | None = None
+    if settings.panel_enabled:
+        panel_client = PanelClient(
+            settings.panel_base_url,
+            settings.panel_api_key.get_secret_value().strip(),
+            settings.panel_timeout_seconds,
+        )
     bot = Bot(settings.bot_token.get_secret_value())
-    dp = Dispatcher(storage=storage, orders=orders)
+    dp = Dispatcher(storage=storage, orders=orders, panel_client=panel_client)
     # Порядок важен: общие команды и кнопки меню срабатывают раньше шагов оформления.
     dp.include_router(router)
     dp.include_router(checkout_router)
@@ -33,6 +41,8 @@ async def main() -> None:
     try:
         await dp.start_polling(bot)
     finally:
+        if panel_client is not None:
+            await panel_client.aclose()
         await orders.close()
         await storage.close()
         await bot.session.close()

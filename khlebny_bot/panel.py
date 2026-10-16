@@ -1,13 +1,18 @@
-"""Клиент панели orders-admin-panel: GET /api/integrations/catalog.
+"""Клиент панели orders-admin-panel.
 
-Ответ панели — голый массив [{"id": int, "name": str, "price_cents": int}].
+GET  /api/integrations/catalog  — загрузка каталога.
+POST /api/integrations/orders   — отправка нового заказа в панель.
+
+Ответ каталога — голый массив [{"id": int, "name": str, "price_cents": int}].
 Признака «недоступна» у позиции нет.
 """
 
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, StrictInt, TypeAdapter, ValidationError
@@ -17,6 +22,7 @@ from .config import Settings
 log = logging.getLogger(__name__)
 
 CATALOG_PATH = "/api/integrations/catalog"
+ORDERS_PATH = "/api/integrations/orders"
 
 
 class PanelError(Exception):
@@ -42,6 +48,34 @@ def parse_catalog(payload: object) -> list[dict]:
     if len(ids) != len(set(ids)):
         raise PanelError("duplicate item ids in catalog")
     return [item.model_dump() for item in items]
+
+
+# ---------------------------------------------------------------------------
+# Модели заказа
+# ---------------------------------------------------------------------------
+
+
+class OrderItemPayload(BaseModel):
+    product_id: int
+    quantity: int
+
+
+class OrderPayload(BaseModel):
+    customer_name: str
+    items: list[OrderItemPayload]
+    telegram_user_id: int
+
+
+class PanelOrderResult(BaseModel):
+    """Ответ панели на создание/поиск заказа."""
+
+    panel_order_id: Any = None  # id, возвращённый панелью (int или str)
+    duplicate: bool = False     # True если панель вернула 200 (дубль) или 409
+
+
+# ---------------------------------------------------------------------------
+# PanelClient
+# ---------------------------------------------------------------------------
 
 
 class PanelClient:
@@ -71,6 +105,43 @@ class PanelClient:
         except ValueError as exc:
             raise PanelError("panel returned invalid JSON") from exc
         return parse_catalog(payload)
+
+    async def create_order(self, payload: OrderPayload) -> PanelOrderResult:
+        """Отправить заказ в панель.
+
+        Статусы:
+          201 — создан,  200 / 409 — дубль (идемпотентность),
+          422 — ошибка валидации панели.
+        Любой другой HTTP-статус или сетевой сбой — PanelError.
+        """
+        idempotency_key = str(uuid.uuid4())
+        try:
+            response = await self._client.post(
+                ORDERS_PATH,
+                json=payload.model_dump(),
+                headers={"Idempotency-Key": idempotency_key},
+            )
+        except httpx.HTTPError as exc:
+            raise PanelError(f"panel order request failed: {type(exc).__name__}") from exc
+
+        if response.status_code == 201:
+            try:
+                panel_id = response.json().get("id")
+            except ValueError:
+                panel_id = None
+            return PanelOrderResult(panel_order_id=panel_id, duplicate=False)
+
+        if response.status_code in (200, 409):
+            try:
+                panel_id = response.json().get("id")
+            except ValueError:
+                panel_id = None
+            return PanelOrderResult(panel_order_id=panel_id, duplicate=True)
+
+        if response.status_code == 422:
+            raise PanelError(f"panel rejected order (422): {response.text[:200]}")
+
+        raise PanelError(f"panel returned HTTP {response.status_code}")
 
     async def aclose(self) -> None:
         await self._client.aclose()

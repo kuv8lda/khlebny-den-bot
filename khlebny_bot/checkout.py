@@ -18,6 +18,7 @@ from . import texts
 from .catalog import get_item
 from .handlers import CheckoutCb, load_cart, reset_fsm
 from .orders import Order, OrderItem, OrdersRepo
+from .panel import OrderItemPayload, OrderPayload, PanelClient, PanelError
 
 log = logging.getLogger(__name__)
 
@@ -253,7 +254,12 @@ async def on_skip(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(CheckoutCb.filter(F.action == "confirm"), Checkout.confirm)
-async def on_confirm(callback: CallbackQuery, state: FSMContext, orders: OrdersRepo) -> None:
+async def on_confirm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    orders: OrdersRepo,
+    panel_client: PanelClient | None = None,
+) -> None:
     checkout = (await state.get_data()).get("checkout") or {}
     items = [OrderItem(**d) for d in checkout.get("items", [])]
     name, token = checkout.get("name"), checkout.get("token")
@@ -268,6 +274,25 @@ async def on_confirm(callback: CallbackQuery, state: FSMContext, orders: OrdersR
     await reset_fsm(state, clear_cart=True)
     if created:
         log.info("order %s created", order.id)
+
+    # Отправить в панель (только новый заказ; дубли не повторяем).
+    if created and panel_client is not None:
+        panel_payload = OrderPayload(
+            customer_name=name,
+            items=[OrderItemPayload(product_id=i.item_id, quantity=i.qty) for i in items],
+            telegram_user_id=callback.from_user.id,
+        )
+        try:
+            result = await panel_client.create_order(panel_payload)
+            log.info(
+                "order %s sent to panel: panel_id=%s duplicate=%s",
+                order.id, result.panel_order_id, result.duplicate,
+            )
+        except PanelError as exc:
+            # Панель недоступна — заказ уже сохранён локально, выставляем флаг.
+            log.warning("panel unavailable for order %s, flagged for retry: %s", order.id, exc)
+            await orders.mark_panel_unsynced(order.id)
+
     template = texts.ORDER_CREATED if created else texts.ORDER_ALREADY
     await _edit(callback, template.format(id=order.id))
     await callback.answer()
