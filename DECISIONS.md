@@ -35,3 +35,10 @@
 - Пустой `PANEL_API_KEY` выключает интеграцию; при сбое панели бот берёт устаревший кэш или хардкод-каталог, повтор запроса — не раньше чем через `CATALOG_TTL_SECONDS`.
 - `id` из панели принимается только как целое (строка `"1"` — ошибка формата); дубли `id` — ошибка.
 - `panel.py` пока не подключён к `handlers`/`checkout`/`main`: они читают `catalog.CATALOG`.
+
+# Этап 4 — живая проверка
+
+- Проверено вживую: заказ из Telegram → POST /api/integrations/orders → 201 CREATED,
+  panel_id получен, в панели заказ с source='telegram', items и amount_cents верны.
+- Fallback (панель недоступна → pending_panel_sync=1) — проверить отдельно.
+- Панель требует load_dotenv() в app.py, иначе PANEL_API_KEY не читается из .env.

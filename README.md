@@ -79,4 +79,4 @@ pytest -q
 - Этап 1 — каталог и корзина.
 - Этап 2 — оформление заказа и «Мои заказы» (локально).
 - Этап 3 — каталог из панели через `GET /api/integrations/catalog` с TTL-кэшем и fallback.
-- Этап 4 — отправка заказов в панель через `POST /api/integrations/orders` с идемпотентностью и offline-fallback.
+- Этап 4 — отправка заказов в панель через `POST /api/integrations/orders` с идемпотентностью и offline-fallback. Живая проверка пройдена: заказ из Telegram появляется в панели с source='telegram'.
