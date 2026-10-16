@@ -8,3 +8,6 @@ __pycache__/
 *.sqlite3
 instance/
 *.pyc
+.kiro/
+_bg/
+_optimizer/
