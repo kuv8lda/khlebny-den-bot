@@ -1,163 +1,119 @@
 # khlebny-den-bot
 
-Демо Telegram-бот пекарни «Хлебный день» на aiogram 3 (long polling).
-Пекарня вымышленная, заказы демонстрационные, реальных платежей нет.
-Заказы хранятся локально в SQLite; при заданном `PANEL_API_KEY` бот отправляет их в панель orders-admin-panel и получает события статусов через `/api/integrations/*`.
+[![CI](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml)
 
-## Запуск
+[Русский](README.ru.md) · [Deployment](docs/DEPLOY.md) · [MIT](LICENSE)
 
-Нужен Python 3.11+ и токен от @BotFather.
+Demo Telegram bakery bot built with aiogram 3, Python 3.11+ and SQLite (long polling).
+The bakery is fictional: no real payments or fulfilment. Optional integration with
+`orders-admin-panel` provides order creation, owner status buttons and customer notifications.
+Stages 1–4 and D–H are implemented; live Telegram/panel acceptance remains a separate check.
+
+## Quick start
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-cp .env.example .env   # вписать BOT_TOKEN, затем: python -m khlebny_bot.main
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env
+# Set BOT_TOKEN from @BotFather in .env, then:
+python -m khlebny_bot.main
 ```
 
-Системный `pip` на Debian/Ubuntu ставить пакеты не даёт (PEP 668), поэтому нужен venv.
+Leave `PANEL_API_KEY` empty for standalone mode. Never commit `.env`.
+For Docker or the two-service Compose deployment, follow [DEPLOY.md](docs/DEPLOY.md)
+first: Compose requires a separately built panel image and its configuration.
 
-Через Docker: `docker compose up --build`.
+## Features and commands
 
-## Настройки
+- `/start`, `/help`: introduction and navigation.
+- `/menu`: nine demo products; `/cart`: quantities (1–20), totals and checkout.
+- Checkout: name (1–40 characters), optional comment (up to 200), confirmation.
+- “My orders” shows the latest five orders and their details.
+- `/cancel`: reset checkout without losing the cart.
+- `/owner`: owner-only local summary. New-order cards include status buttons when
+  the panel ID is known. Owners must first message the bot. Phone numbers are not collected.
+- `/privacy`: storage and disclosure notice; `/forget`: local deletion and a panel
+  anonymization request.
 
-Переменные окружения (или `.env`, он в `.gitignore`):
+Owner transitions: `pending → paid|cancelled`, `paid → shipped|cancelled`,
+`shipped → completed`. Unauthorized users cannot change statuses. HTTP 409 is
+explained to the owner without changing local state.
 
-- `BOT_TOKEN` — токен бота, обязателен.
-- `LOG_LEVEL` — уровень логов, по умолчанию `INFO`.
-- `FSM_DB_PATH` — путь к SQLite-файлу с состоянием, по умолчанию `data/fsm.sqlite3`.
-- `ORDERS_DB_PATH` — путь к SQLite-файлу с заказами; если пусто, заказы лежат в файле `FSM_DB_PATH`.
-- `PANEL_BASE_URL` — адрес панели orders-admin-panel, по умолчанию `http://127.0.0.1:5000`.
-- `PANEL_API_KEY` — ключ интеграции с панелью. Если пусто — интеграция выключена, бот работает автономно.
-- `PANEL_TIMEOUT_SECONDS` — таймаут запроса к панели, по умолчанию `5`.
-- `EVENTS_POLL_INTERVAL` — интервал опроса событий панели в секундах, по умолчанию `5`; положительное конечное число.
-- `CATALOG_TTL_SECONDS` — время кэша каталога, по умолчанию `60`.
-- `OWNER_TELEGRAM_IDS` — Telegram ID владельцев через запятую (`123,456`). Пусто — сценарий владельца выключен. Неверное значение — ошибка при старте.
+## Configuration
 
-## Команды бота
+Environment variables override `.env` (see [.env.example](.env.example)).
 
-- `/start` — приветствие и кнопки «Меню», «Корзина», «Мои заказы».
-- `/menu` — 9 позиций, нажатие добавляет позицию в корзину.
-- `/cart` — состав, количество (1–20), итог; кнопки «−», «+», «✕», «Очистить корзину» и «Оформить заказ».
-- `/cancel` — прервать оформление или другое действие (корзина сохраняется, заказ не создаётся).
-- `/help` — справка.
-- `/owner` — сводка для владельцев. Остальным отвечает «Нет доступа». В меню команд Telegram не показывается.
+| Variable | Default / meaning |
+| --- | --- |
+| `BOT_TOKEN` | Required Telegram token |
+| `FSM_DB_PATH` | `data/fsm.sqlite3` |
+| `ORDERS_DB_PATH` | Empty: use the FSM database |
+| `PANEL_BASE_URL` | `http://127.0.0.1:5000` |
+| `PANEL_API_KEY` | Empty: disable panel integration |
+| `PANEL_TIMEOUT_SECONDS` | `5`, timeout per HTTP attempt |
+| `EVENTS_POLL_INTERVAL` | `5`, positive finite seconds |
+| `CATALOG_TTL_SECONDS` | `60`, catalog cache TTL |
+| `OWNER_TELEGRAM_IDS` | Empty; otherwise comma-separated Telegram IDs |
 
-Оформление: имя (1–40 символов) → комментарий (до 200, можно пропустить) → подтверждение. После подтверждения создаётся заказ со статусом `new`, корзина очищается. «Мои заказы» показывает последние 5 заказов; нажатие на заказ показывает состав. Заказ демонстрационный и не исполняется. Хранятся только Telegram user_id, имя и комментарий.
+Logging is currently fixed at INFO; the `LOG_LEVEL` settings field is not wired to startup.
+Compose overrides database paths to `/app/data/` and the panel URL to its service hostname.
+Compose-only settings are documented in the deployment guide.
 
-## Проверки
+## Panel integration and reliability
+
+Requests use Bearer authentication. Endpoints:
+
+- `GET /api/integrations/catalog`: catalog with TTL cache and stale/static fallback.
+- `POST /api/integrations/orders`: creation with the persisted checkout token as
+  `Idempotency-Key`; 200/409 are treated as duplicates.
+- `PATCH /api/integrations/orders/<id>/status`: owner transitions.
+- `GET /api/integrations/events?since_id=N&limit=50`: status polling, SQLite cursor.
+- `POST /api/integrations/forget`: anonymization request.
+
+Network errors and HTTP 5xx receive up to three attempts with 0.25/0.5-second
+backoff; HTTP 4xx are not retried. On failure the local order is marked
+`pending_panel_sync`; the cart and confirmation remain intact. The customer must
+press Confirm again to resend the same order with the same key. There is no background outbox.
+
+Checkout allows five new orders per user in a rolling hour. Persistent counters
+survive restarts and `/forget`; duplicate confirmation does not consume the quota.
+Messages/buttons are throttled to one event per user per 0.5 seconds.
+SIGTERM/SIGINT stop polling, drain handlers and stop workers before closing resources.
+
+Events notify customers about pending, paid, shipped, completed and cancelled orders.
+Already processed IDs are skipped. Delivery failures are retried on a later poll;
+blocked recipients are skipped. Unknown orders/statuses are logged and skipped.
+The cursor is saved **after** sending: a crash between Telegram delivery and SQLite
+commit can cause a duplicate. This is not an exactly-once guarantee.
+Run only one bot/event worker per token and database.
+
+## Privacy
+
+Local storage includes Telegram IDs, names, comments, order items/totals, carts,
+FSM data and the event cursor. `/forget` deletes local orders and FSM/cart data
+across chats and requests panel anonymization. On panel failure, local deletion
+has already happened; repeat the command later. There is no automatic retry queue.
+
+The panel anonymizes name, phone and username, but retains Telegram ID, comments,
+orders, totals and events. Telegram messages and backups are not deleted.
+Inactive carts/FSM are removed after seven days, checked at startup and hourly.
+Orders have no automatic retention limit. Anti-abuse counters retain ID/time after
+`/forget` and are cleaned at startup/hourly when older than an hour (up to two hours
+while running). The privacy command discloses this exception.
+
+## Development
 
 ```bash
 ruff check .
 pytest -q
 ```
 
-Тесты работают на моках, без сети.
+Tests mock Telegram and HTTP; they do not require live credentials. CI tests Python
+3.11–3.13 and builds the Docker image, checking its non-root user and writable data
+volume. Dependency ranges live in `pyproject.toml`; there is no lock file.
 
-## Структура
-
-- `khlebny_bot/main.py` — запуск, подключение хранилища, репозитория заказов и роутеров.
-- `khlebny_bot/handlers.py` — обработчики меню и корзины, клавиатуры.
-- `khlebny_bot/checkout.py` — оформление заказа (FSM) и «Мои заказы».
-- `khlebny_bot/orders.py` — репозиторий заказов на SQLite.
-- `khlebny_bot/owner.py` — сценарий владельца: уведомления, кнопки статусов, `/owner`.
-- `khlebny_bot/cart.py` — логика корзины и формат цен.
-- `khlebny_bot/catalog.py` — каталог (пока хардкод, формат `[{id, name, price_cents}]`).
-- `khlebny_bot/texts.py` — все тексты бота.
-- `khlebny_bot/storage.py` — FSM-хранилище на SQLite, переживает перезапуск.
-- `khlebny_bot/config.py` — настройки.
-- `tests/` — тесты.
-- `docs/` — ТЗ следующих этапов.
-- `DECISIONS.md` — отклонения от ТЗ.
-
-## Интеграция с панелью
-
-После подтверждения заказа бот отправляет его в панель `POST /api/integrations/orders` с заголовком `Authorization: Bearer <PANEL_API_KEY>` и уникальным `Idempotency-Key`.
-
-Если панель недоступна после ретраев — заказ сохраняется локально с `pending_panel_sync = 1`, клиент получает предупреждение. Корзина и подтверждение остаются: повторное «Подтвердить» повторяет отправку без создания нового локального заказа. Фоновой синхронизации нет.
-
-Пустой `PANEL_API_KEY` полностью выключает интеграцию: бот работает автономно.
-
-## Оповещения клиента (этап E)
-
-При включённой интеграции фоновый воркер раз в `EVENTS_POLL_INTERVAL` секунд запрашивает
-`GET /api/integrations/events?since_id=N&limit=50`. Курсор хранится в таблице
-`panel_events_cursor` в `ORDERS_DB_PATH` (по умолчанию — в `FSM_DB_PATH`).
-После перезапуска обработка продолжается с сохранённого id.
-
-По `order_id` панели бот находит локальный заказ и отправляет клиенту одно сообщение
-с номером заказа в боте и статусом: «Ожидает оплаты», «Оплачен», «Передан в доставку»,
-«Выполнен», «Отменён». Локальный статус обновляется для «Моих заказов» и `/owner`.
-Повторный опрос уже обработанных событий сообщений не создаёт.
-
-Сетевые ошибки панели и Telegram логируются; повтор — в следующем цикле, курсор не
-продвигается за неотправленное событие. Если клиент заблокировал бота, событие
-фиксируется без доставки. Неизвестные заказы (например, старая история панели) и
-неизвестные статусы пропускаются с предупреждением. Нужен один экземпляр воркера
-на базу заказов. При остановке воркер завершает текущую обработку до закрытия сессий и БД.
-
-Курсор фиксируется **после** отправки: авария между ответом Telegram и записью в SQLite
-может привести к повторной доставке. Строгое exactly-once между Telegram и SQLite
-без общей транзакции недостижимо.
-
-## Сценарий владельца
-
-Нужны `OWNER_TELEGRAM_IDS` и `PANEL_API_KEY`. Владелец должен хотя бы раз написать боту, иначе Telegram не даст боту написать ему первым.
-
-- Новый заказ: владельцам приходит карточка — номер, имя, состав, сумма, дата (UTC), комментарий — и кнопки допустимых следующих статусов. Телефон бот не собирает, поэтому в карточке его нет.
-- Переходы такие же, как в панели: `pending` → `paid` или `cancelled`, `paid` → `shipped` или `cancelled`, `shipped` → `completed`.
-- Кнопка вызывает `PATCH /api/integrations/orders/<id>/status` с телом `{"status": "..."}`. После успеха карточка обновляется: новый статус, новые кнопки. После `completed` и `cancelled` кнопок нет.
-- Ответ панели 409 (переход недопустим или заказ уже изменён) — владелец видит пояснение, статус в боте не меняется. Панель недоступна — то же, с другим текстом.
-- Если заказ не дошёл до панели (`pending_panel_sync = 1`), карточка приходит без кнопок с пометкой.
-- `/owner` показывает, сколько заказов ожидают оплаты и сколько в работе (оплачены или в доставке). Цифры берутся из локальной базы бота; изменения из панели поступают через опрос событий.
-- Кнопки и `/owner` от чужих Telegram ID отвечают «Нет доступа» и ничего не меняют.
-
-## Статус
-
-Готово: этапы 1–4, D, E, F и G. Для этапов D и E код и тесты готовы, живая проверка с панелью ещё не проведена.
-
-- Этап 1 — каталог и корзина.
-- Этап 2 — оформление заказа и «Мои заказы» (локально).
-- Этап 3 — каталог из панели через `GET /api/integrations/catalog` с TTL-кэшем и fallback.
-- Этап 4 — отправка заказов в панель через `POST /api/integrations/orders` с идемпотентностью и offline-fallback. Живая проверка пройдена: заказ из Telegram появляется в панели с source='telegram'.
-- Этап D — сценарий владельца: уведомление о заказе, кнопки статусов, `/owner`.
-
-## Приватность (этап F)
-
-`/privacy` описывает хранение и передачу данных. `/forget` удаляет локальные заказы
-с составом, корзины и FSM пользователя во всех чатах и запрашивает анонимизацию
-в панели, если интеграция включена. При ошибке панели локальные данные уже удалены,
-но команду нужно повторить позже; автоматической очереди повторов нет.
-
-Панель очищает имя, телефон и username, но сохраняет Telegram ID, комментарии,
-заказы, суммы и события. Сообщения Telegram и резервные копии не удаляются.
-
-Корзины и FSM старше 7 дней с последнего изменения очищаются при запуске фоновой
-задачи и затем каждый час. Заказы автоматически не очищаются. При миграции старой
-FSM-базы записи получают полный срок с момента миграции. Реализация команд
-и фоновой задачи — `khlebny_bot/privacy.py`.
-
-## Надёжность (этап G)
-
-- При создании заказа `Idempotency-Key` равен сохранённому токену оформления.
-  Он не меняется ни между HTTP-повторами, ни после перезапуска FSM.
-- Для сетевых ошибок и HTTP 5xx: максимум три попытки с задержками 0,25 и 0,5 с.
-  Таймаут каждой попытки — `PANEL_TIMEOUT_SECONDS` (по умолчанию 5 с).
-  HTTP 4xx не повторяются автоматически; 200/409 создания считаются дублем.
-- При сбое панели заказ остаётся локально с `pending_panel_sync=1`, клиент получает
-  предупреждение, корзина и подтверждение сохраняются. Повторное «Подтвердить»
-  отправляет тот же заказ с тем же ключом. Фоновой отправки отложенных заказов нет.
-- В пользовательском checkout допускается пять новых заказов за скользящий час;
-  повтор существующего заказа квоту не расходует. Счётчики в SQLite переживают
-  перезапуск. Входящие сообщения и кнопки ограничены одним событием за 0,5 с
-  на пользователя; лишние сообщения игнорируются, кнопки получают пояснение.
-- SIGTERM/SIGINT останавливают polling; бот ждёт активные обработчики, затем
-  останавливает фоновые задачи и закрывает HTTP/Telegram-сессии и SQLite.
-  FSM-действия одного пользователя в одном чате выполняются последовательно.
-
-В соседнем проекте панели добавлен опрос каждые 5 секунд без перезагрузки страницы.
-Таблица, счётчики, сводка и лента обновляются с сохранением фильтров и страницы.
-Опрос приостановлен в скрытой вкладке, при открытой форме/карточке/меню статуса
-и при фокусе в поле ввода. Ошибки фонового опроса сохраняют показанную таблицу.
-
-Антиспам-счётчики содержат Telegram ID и время создания заказа. Для защиты квоты
-они сохраняются после `/forget` и очищаются при запуске и каждый час, если старше
-часа (максимум два часа при работающем боте); об этом сообщает `/privacy`.
+Modules: `handlers` (menu/cart), `checkout` (FSM), `orders`/`storage` (SQLite),
+`panel` (HTTP/cache), `owner`, `events`, `privacy`, `reliability`, `config`, `texts`.
+See [DECISIONS.md](DECISIONS.md) for design choices and the
+[Russian guide](README.ru.md) for detailed behavior. Licensed under [MIT](LICENSE).

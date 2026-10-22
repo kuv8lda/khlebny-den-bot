@@ -1,4 +1,5 @@
 .env
+.env.panel
 data/
 __pycache__/
 .pytest_cache/

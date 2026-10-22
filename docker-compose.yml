@@ -1,0 +1,34 @@
+services:
+  bot:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PANEL_BASE_URL: http://panel:${PANEL_PORT:-5000}
+      PANEL_API_KEY: ${PANEL_API_KEY:?Set PANEL_API_KEY in .env}
+      FSM_DB_PATH: /app/data/fsm.sqlite3
+      ORDERS_DB_PATH: /app/data/orders.sqlite3
+    volumes:
+      - bot-data:/app/data
+    depends_on:
+      - panel
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  panel:
+    image: ${PANEL_IMAGE:?Set PANEL_IMAGE to a built orders-admin-panel image}
+    restart: unless-stopped
+    env_file: .env.panel
+    volumes:
+      - panel-data:${PANEL_DATA_DIR:?Set PANEL_DATA_DIR to the panel persistent directory}
+    ports:
+      - "127.0.0.1:${PANEL_HOST_PORT:-5000}:${PANEL_PORT:-5000}"
+    stop_grace_period: 60s
+
+volumes:
+  bot-data:
+  panel-data:
