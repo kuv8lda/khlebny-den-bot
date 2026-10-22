@@ -212,6 +212,17 @@ class PanelClient:
             )
         raise PanelError(f"panel returned HTTP {response.status_code}")
 
+    async def forget(self, telegram_user_id: int) -> None:
+        """Запросить анонимизацию данных клиента в панели (идемпотентно)."""
+        try:
+            response = await self._client.post(
+                "/api/integrations/forget", json={"telegram_user_id": telegram_user_id}
+            )
+        except httpx.HTTPError as exc:
+            raise PanelError(f"panel forget request failed: {type(exc).__name__}") from exc
+        if response.status_code != 200 or _json_object(response).get("ok") is not True:
+            raise PanelError(f"panel forget failed (HTTP {response.status_code})")
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

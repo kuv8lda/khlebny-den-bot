@@ -276,6 +276,18 @@ class OrdersRepo:
         """Зафиксировать обработку события и локальный статус одной транзакцией."""
         await asyncio.to_thread(self._ack_event, event_id, order_id, status)
 
+    def _forget(self, user_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM order_items WHERE order_id IN "
+                "(SELECT id FROM orders WHERE user_id=?)", (user_id,),
+            )
+            self._conn.execute("DELETE FROM orders WHERE user_id=?", (user_id,))
+
+    async def forget(self, user_id: int) -> None:
+        """Удалить заказы клиента и их состав одной транзакцией."""
+        await asyncio.to_thread(self._forget, user_id)
+
     async def close(self) -> None:
         with self._lock:
             self._conn.close()
