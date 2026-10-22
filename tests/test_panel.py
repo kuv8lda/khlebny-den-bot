@@ -124,7 +124,7 @@ async def test_provider_keeps_stale_cache_when_panel_goes_down(client):
     # после сбоя повторный запрос не раньше чем через TTL
     clock.now = 120
     await provider.get()
-    assert route.call_count == 2
+    assert route.call_count == 4
 
 
 async def test_provider_without_client_uses_fallback():

@@ -3,6 +3,7 @@ import functools
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand
 
 from . import texts
@@ -16,6 +17,7 @@ from .owner import router as owner_router
 from .panel import PanelClient
 from .privacy import CleanupWorker
 from .privacy import router as privacy_router
+from .reliability import TrafficMiddleware
 from .storage import SqliteStorage
 
 
@@ -36,13 +38,22 @@ async def main() -> None:
     if owner_ids and panel_client is None:
         logging.warning("OWNER_TELEGRAM_IDS задан, но PANEL_API_KEY пуст: кнопок статусов не будет")
     owner_notifier = functools.partial(notify_owners, bot, owner_ids) if owner_ids else None
+    isolation = SimpleEventIsolation()
     dp = Dispatcher(
         storage=storage,
+        events_isolation=isolation,
         orders=orders,
         panel_client=panel_client,
         owner_ids=owner_ids,
         owner_notifier=owner_notifier,
     )
+    traffic = TrafficMiddleware()
+    # Учёт задач до FSM-lock: shutdown ждёт также обработчики, ожидающие свой lock.
+    dp.update.outer_middleware.unregister(dp.fsm)
+    dp.update.outer_middleware(traffic)
+    dp.update.outer_middleware(dp.fsm)
+    dp.shutdown.handlers = [h for h in dp.shutdown.handlers if h.callback != dp.fsm.close]
+    dp.shutdown.register(traffic.drain)
     # Порядок важен: общие команды и кнопки меню срабатывают раньше шагов оформления.
     dp.include_router(router)
     dp.include_router(owner_router)
@@ -50,9 +61,10 @@ async def main() -> None:
     dp.include_router(checkout_router)
     worker = (
         EventsWorker(bot, panel_client, orders, settings.events_poll_interval)
-        if panel_client is not None else None
+        if panel_client is not None
+        else None
     )
-    cleanup = CleanupWorker(storage)
+    cleanup = CleanupWorker(storage, orders=orders)
     cleanup_task = None
     worker_task = None
     try:
@@ -72,6 +84,7 @@ async def main() -> None:
         await dp.start_polling(bot, close_bot_session=False)
     finally:
         try:
+            await traffic.drain()
             cleanup.stop()
             if cleanup_task is not None:
                 await cleanup_task
@@ -82,6 +95,7 @@ async def main() -> None:
             if panel_client is not None:
                 await panel_client.aclose()
             await orders.close()
+            await isolation.close()
             await storage.close()
             await bot.session.close()
 

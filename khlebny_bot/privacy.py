@@ -51,7 +51,10 @@ async def cmd_forget(
 
 
 class CleanupWorker:
-    def __init__(self, storage: SqliteStorage, interval: float = 3600) -> None:
+    def __init__(
+        self, storage: SqliteStorage, interval: float = 3600, *, orders: OrdersRepo | None = None
+    ) -> None:
+        self.orders = orders
         self.storage = storage
         self.interval = interval
         self._stop = asyncio.Event()
@@ -63,6 +66,8 @@ class CleanupWorker:
         while not self._stop.is_set():
             try:
                 await self.storage.cleanup_expired()
+                if self.orders is not None:
+                    await self.orders.cleanup_rate_limits()
             except sqlite3.Error:
                 log.exception("FSM cleanup failed")
             try:

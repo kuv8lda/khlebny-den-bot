@@ -9,12 +9,16 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 STATUS_NEW = "new"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS order_rate_limits (
+    user_id INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_order_limits ON order_rate_limits(user_id, created_at);
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -71,6 +75,10 @@ class Order:
     panel_order_id: int | None = None  # id заказа в панели; None — в панель не попал
 
 
+class OrderRateLimitError(Exception):
+    """Не более пяти новых заказов в скользящий час."""
+
+
 class OrdersRepo:
     def __init__(self, path: str | Path) -> None:
         path = Path(path)
@@ -102,12 +110,19 @@ class OrdersRepo:
         # row columns: id, user_id, name, comment, status, total_cents, created_at,
         #              pending_panel_sync, panel_order_id
         id_, user_id, name, comment, status, total_cents, created_at, pps, panel_id = row
-        return Order(id_, user_id, name, comment, status, total_cents, created_at,
-                     bool(pps), items, panel_id)
+        return Order(
+            id_, user_id, name, comment, status, total_cents, created_at, bool(pps), items, panel_id
+        )
 
     def _create(
-        self, user_id: int, name: str, comment: str, items: Sequence[OrderItem], token: str,
+        self,
+        user_id: int,
+        name: str,
+        comment: str,
+        items: Sequence[OrderItem],
+        token: str,
         pending_panel_sync: bool = False,
+        enforce_rate_limit: bool = False,
     ) -> tuple[Order, bool]:
         if not items:
             raise ValueError("order must contain at least one item")
@@ -117,13 +132,29 @@ class OrdersRepo:
             ).fetchone()
             if row is not None:
                 return self._row_to_order(row, self._items(row[0])), False
+            cutoff = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
+            self._conn.execute("DELETE FROM order_rate_limits WHERE created_at<=?", (cutoff,))
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM order_rate_limits WHERE user_id=?", (user_id,)
+            ).fetchone()[0]
+            if enforce_rate_limit and count >= 5:
+                raise OrderRateLimitError
             total = sum(i.price_cents * i.qty for i in items)
             created_at = datetime.now(UTC).isoformat(timespec="seconds")
+            self._conn.execute("INSERT INTO order_rate_limits VALUES (?, ?)", (user_id, created_at))
             cur = self._conn.execute(
                 "INSERT INTO orders(user_id, name, comment, status, total_cents, created_at, "
                 "checkout_token, pending_panel_sync) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, name, comment, STATUS_NEW, total, created_at, token,
-                 int(pending_panel_sync)),
+                (
+                    user_id,
+                    name,
+                    comment,
+                    STATUS_NEW,
+                    total,
+                    created_at,
+                    token,
+                    int(pending_panel_sync),
+                ),
             )
             order_id = cur.lastrowid
             assert order_id is not None
@@ -133,8 +164,15 @@ class OrdersRepo:
                 [(order_id, i.item_id, i.name, i.price_cents, i.qty) for i in items],
             )
             order = Order(
-                order_id, user_id, name, comment, STATUS_NEW, total, created_at,
-                pending_panel_sync, tuple(items),
+                order_id,
+                user_id,
+                name,
+                comment,
+                STATUS_NEW,
+                total,
+                created_at,
+                pending_panel_sync,
+                tuple(items),
             )
             return order, True
 
@@ -190,23 +228,32 @@ class OrdersRepo:
 
     def _mark_synced(self, order_id: int) -> None:
         with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE orders SET pending_panel_sync=0 WHERE id=?", (order_id,)
-            )
+            self._conn.execute("UPDATE orders SET pending_panel_sync=0 WHERE id=?", (order_id,))
 
     def _mark_unsynced(self, order_id: int) -> None:
         with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE orders SET pending_panel_sync=1 WHERE id=?", (order_id,)
-            )
+            self._conn.execute("UPDATE orders SET pending_panel_sync=1 WHERE id=?", (order_id,))
 
     async def create(
-        self, user_id: int, name: str, comment: str, items: Sequence[OrderItem], token: str,
+        self,
+        user_id: int,
+        name: str,
+        comment: str,
+        items: Sequence[OrderItem],
+        token: str,
         pending_panel_sync: bool = False,
+        enforce_rate_limit: bool = False,
     ) -> tuple[Order, bool]:
         """Вернуть (заказ, создан_ли_сейчас). Тот же token даёт тот же заказ."""
         return await asyncio.to_thread(
-            self._create, user_id, name, comment, items, token, pending_panel_sync
+            self._create,
+            user_id,
+            name,
+            comment,
+            items,
+            token,
+            pending_panel_sync,
+            enforce_rate_limit,
         )
 
     async def mark_panel_synced(self, order_id: int) -> None:
@@ -270,23 +317,29 @@ class OrdersRepo:
     async def event_cursor(self) -> int:
         return await asyncio.to_thread(self._event_cursor)
 
-    async def ack_event(
-        self, event_id: int, order_id: int | None = None, status: str = ""
-    ) -> None:
+    async def ack_event(self, event_id: int, order_id: int | None = None, status: str = "") -> None:
         """Зафиксировать обработку события и локальный статус одной транзакцией."""
         await asyncio.to_thread(self._ack_event, event_id, order_id, status)
 
     def _forget(self, user_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "DELETE FROM order_items WHERE order_id IN "
-                "(SELECT id FROM orders WHERE user_id=?)", (user_id,),
+                "DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)",
+                (user_id,),
             )
             self._conn.execute("DELETE FROM orders WHERE user_id=?", (user_id,))
 
     async def forget(self, user_id: int) -> None:
         """Удалить заказы клиента и их состав одной транзакцией."""
         await asyncio.to_thread(self._forget, user_id)
+
+    def _cleanup_rate_limits(self) -> None:
+        cutoff = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM order_rate_limits WHERE created_at<=?", (cutoff,))
+
+    async def cleanup_rate_limits(self) -> None:
+        await asyncio.to_thread(self._cleanup_rate_limits)
 
     async def close(self) -> None:
         with self._lock:

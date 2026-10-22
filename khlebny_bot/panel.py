@@ -81,7 +81,7 @@ class PanelOrderResult(BaseModel):
     """Ответ панели на создание/поиск заказа."""
 
     panel_order_id: Any = None  # id, возвращённый панелью (int или str)
-    duplicate: bool = False     # True если панель вернула 200 (дубль) или 409
+    duplicate: bool = False  # True если панель вернула 200 (дубль) или 409
 
 
 # ---------------------------------------------------------------------------
@@ -114,11 +114,24 @@ class PanelClient:
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
+    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        for attempt in range(3):
+            try:
+                response = await self._client.request(method, path, **kwargs)
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
+            else:
+                if response.status_code < 500 or attempt == 2:
+                    return response
+            await asyncio.sleep(0.25 * 2**attempt)
+        raise AssertionError("unreachable")
+
     async def fetch_events(self, since_id: int, limit: int = 50) -> list[PanelEvent]:
         """События Telegram-заказов после курсора, по возрастанию id."""
         try:
-            response = await self._client.get(
-                EVENTS_PATH, params={"since_id": since_id, "limit": limit}
+            response = await self._request(
+                "GET", EVENTS_PATH, params={"since_id": since_id, "limit": limit}
             )
             response.raise_for_status()
             payload = response.json()
@@ -139,7 +152,7 @@ class PanelClient:
 
     async def fetch_catalog(self) -> list[dict]:
         try:
-            response = await self._client.get(CATALOG_PATH)
+            response = await self._request("GET", CATALOG_PATH)
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:
@@ -150,7 +163,9 @@ class PanelClient:
             raise PanelError("panel returned invalid JSON") from exc
         return parse_catalog(payload)
 
-    async def create_order(self, payload: OrderPayload) -> PanelOrderResult:
+    async def create_order(
+        self, payload: OrderPayload, *, idempotency_key: str | None = None
+    ) -> PanelOrderResult:
         """Отправить заказ в панель.
 
         Статусы:
@@ -158,9 +173,10 @@ class PanelClient:
           422 — ошибка валидации панели.
         Любой другой HTTP-статус или сетевой сбой — PanelError.
         """
-        idempotency_key = str(uuid.uuid4())
+        idempotency_key = idempotency_key or str(uuid.uuid4())
         try:
-            response = await self._client.post(
+            response = await self._request(
+                "POST",
                 ORDERS_PATH,
                 json=payload.model_dump(),
                 headers={"Idempotency-Key": idempotency_key},
@@ -195,8 +211,8 @@ class PanelClient:
         Остальное (404, 422, 5xx, сеть) — PanelError.
         """
         try:
-            response = await self._client.patch(
-                ORDER_STATUS_PATH.format(order_id=order_id), json={"status": status}
+            response = await self._request(
+                "PATCH", ORDER_STATUS_PATH.format(order_id=order_id), json={"status": status}
             )
         except httpx.HTTPError as exc:
             raise PanelError(f"panel status request failed: {type(exc).__name__}") from exc
@@ -215,8 +231,8 @@ class PanelClient:
     async def forget(self, telegram_user_id: int) -> None:
         """Запросить анонимизацию данных клиента в панели (идемпотентно)."""
         try:
-            response = await self._client.post(
-                "/api/integrations/forget", json={"telegram_user_id": telegram_user_id}
+            response = await self._request(
+                "POST", "/api/integrations/forget", json={"telegram_user_id": telegram_user_id}
             )
         except httpx.HTTPError as exc:
             raise PanelError(f"panel forget request failed: {type(exc).__name__}") from exc

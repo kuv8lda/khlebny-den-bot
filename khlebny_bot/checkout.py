@@ -17,7 +17,7 @@ from . import cart as cart_logic
 from . import texts
 from .catalog import get_item
 from .handlers import CheckoutCb, load_cart, reset_fsm
-from .orders import Order, OrderItem, OrdersRepo
+from .orders import Order, OrderItem, OrderRateLimitError, OrdersRepo
 from .panel import OrderItemPayload, OrderPayload, PanelClient, PanelError
 
 log = logging.getLogger(__name__)
@@ -280,34 +280,54 @@ async def on_confirm(
         await callback.answer(texts.CHECKOUT_STALE, show_alert=True)
         return
     # Повтор с тем же token вернёт тот же заказ, дубля не будет.
-    order, created = await orders.create(
-        callback.from_user.id, name, checkout.get("comment", ""), items, token
-    )
-    await reset_fsm(state, clear_cart=True)
+    try:
+        order, created = await orders.create(
+            callback.from_user.id,
+            name,
+            checkout.get("comment", ""),
+            items,
+            token,
+            pending_panel_sync=panel_client is not None,
+            enforce_rate_limit=True,
+        )
+    except OrderRateLimitError:
+        await callback.answer(texts.ORDER_RATE_LIMIT, show_alert=True)
+        return
     if created:
         log.info("order %s created", order.id)
 
-    # Отправить в панель (только новый заказ; дубли не повторяем).
-    if created and panel_client is not None:
+    # Отправить новый заказ или повторить незавершённую отправку с тем же ключом.
+    if (created or order.pending_panel_sync) and panel_client is not None:
         panel_payload = OrderPayload(
             customer_name=name,
             items=[OrderItemPayload(product_id=i.item_id, quantity=i.qty) for i in items],
             telegram_user_id=callback.from_user.id,
         )
         try:
-            result = await panel_client.create_order(panel_payload)
+            result = await panel_client.create_order(panel_payload, idempotency_key=token)
             log.info(
                 "order %s sent to panel: panel_id=%s duplicate=%s",
-                order.id, result.panel_order_id, result.duplicate,
+                order.id,
+                result.panel_order_id,
+                result.duplicate,
             )
             panel_id = _as_int(result.panel_order_id)
             if panel_id is not None:
                 await orders.set_panel_order_id(order.id, panel_id)
+            await orders.mark_panel_synced(order.id)
         except PanelError as exc:
             # Панель недоступна — заказ уже сохранён локально, выставляем флаг.
             log.warning("panel unavailable for order %s, flagged for retry: %s", order.id, exc)
             await orders.mark_panel_unsynced(order.id)
+            await callback.answer(texts.PANEL_ORDER_UNAVAILABLE, show_alert=True)
+            if created and owner_notifier is not None:
+                try:
+                    await owner_notifier(await orders.get_by_id(order.id) or order)
+                except Exception:
+                    log.exception("owner notification failed for order %s", order.id)
+            return
 
+    await reset_fsm(state, clear_cart=True)
     template = texts.ORDER_CREATED if created else texts.ORDER_ALREADY
     await _edit(callback, template.format(id=order.id))
     await callback.answer()
