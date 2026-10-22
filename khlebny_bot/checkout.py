@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from datetime import datetime
 
@@ -115,6 +115,17 @@ def render_order(order: Order) -> str:
         texts.DEMO_NOTE,
     ]
     return "\n".join(lines)
+
+
+def _as_int(value: object) -> int | None:
+    """id заказа из ответа панели: int или строка из цифр, иначе None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
 
 
 def _skip_keyboard() -> InlineKeyboardMarkup:
@@ -259,6 +270,7 @@ async def on_confirm(
     state: FSMContext,
     orders: OrdersRepo,
     panel_client: PanelClient | None = None,
+    owner_notifier: Callable[[Order], Awaitable[None]] | None = None,
 ) -> None:
     checkout = (await state.get_data()).get("checkout") or {}
     items = [OrderItem(**d) for d in checkout.get("items", [])]
@@ -288,6 +300,9 @@ async def on_confirm(
                 "order %s sent to panel: panel_id=%s duplicate=%s",
                 order.id, result.panel_order_id, result.duplicate,
             )
+            panel_id = _as_int(result.panel_order_id)
+            if panel_id is not None:
+                await orders.set_panel_order_id(order.id, panel_id)
         except PanelError as exc:
             # Панель недоступна — заказ уже сохранён локально, выставляем флаг.
             log.warning("panel unavailable for order %s, flagged for retry: %s", order.id, exc)
@@ -296,6 +311,14 @@ async def on_confirm(
     template = texts.ORDER_CREATED if created else texts.ORDER_ALREADY
     await _edit(callback, template.format(id=order.id))
     await callback.answer()
+
+    # Владельцу — после ответа клиенту, и только про новый заказ. Сбой не должен
+    # ломать оформление: заказ уже сохранён.
+    if created and owner_notifier is not None:
+        try:
+            await owner_notifier(await orders.get_by_id(order.id) or order)
+        except Exception:
+            log.exception("owner notification failed for order %s", order.id)
 
 
 @router.callback_query(CheckoutCb.filter(F.action == "cancel"), Checkout.confirm)

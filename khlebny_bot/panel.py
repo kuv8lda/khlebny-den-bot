@@ -2,6 +2,7 @@
 
 GET  /api/integrations/catalog  — загрузка каталога.
 POST /api/integrations/orders   — отправка нового заказа в панель.
+PATCH /api/integrations/orders/<id>/status — смена статуса заказа владельцем.
 
 Ответ каталога — голый массив [{"id": int, "name": str, "price_cents": int}].
 Признака «недоступна» у позиции нет.
@@ -23,10 +24,19 @@ log = logging.getLogger(__name__)
 
 CATALOG_PATH = "/api/integrations/catalog"
 ORDERS_PATH = "/api/integrations/orders"
+ORDER_STATUS_PATH = ORDERS_PATH + "/{order_id}/status"
 
 
 class PanelError(Exception):
     """Панель недоступна или вернула ответ не в ожидаемом формате."""
+
+
+class PanelConflictError(PanelError):
+    """Панель отказала в смене статуса (409): переход недопустим или заказ уже изменён."""
+
+    def __init__(self, message: str, current_status: str | None = None) -> None:
+        super().__init__(message)
+        self.current_status = current_status  # если панель сообщила текущий статус
 
 
 class _CatalogItem(BaseModel):
@@ -143,8 +153,42 @@ class PanelClient:
 
         raise PanelError(f"panel returned HTTP {response.status_code}")
 
+    async def patch_status(self, order_id: int, status: str) -> str:
+        """Сменить статус заказа в панели. Вернуть статус после смены.
+
+        200 — готово (статус берём из ответа, иначе тот, что просили).
+        409 — переход недопустим: PanelConflictError.
+        Остальное (404, 422, 5xx, сеть) — PanelError.
+        """
+        try:
+            response = await self._client.patch(
+                ORDER_STATUS_PATH.format(order_id=order_id), json={"status": status}
+            )
+        except httpx.HTTPError as exc:
+            raise PanelError(f"panel status request failed: {type(exc).__name__}") from exc
+
+        body = _json_object(response)
+        reported = body.get("status")
+        if response.status_code == 200:
+            return reported if isinstance(reported, str) and reported else status
+        if response.status_code == 409:
+            raise PanelConflictError(
+                "panel refused status change (409)",
+                reported if isinstance(reported, str) and reported else None,
+            )
+        raise PanelError(f"panel returned HTTP {response.status_code}")
+
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _json_object(response: httpx.Response) -> dict:
+    """Тело ответа как словарь; всё остальное (не JSON, массив) — пустой словарь."""
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 class CatalogProvider:

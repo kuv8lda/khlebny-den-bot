@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS orders (
     total_cents INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     checkout_token TEXT NOT NULL UNIQUE,
-    pending_panel_sync INTEGER NOT NULL DEFAULT 0
+    pending_panel_sync INTEGER NOT NULL DEFAULT 0,
+    panel_order_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
 CREATE TABLE IF NOT EXISTS order_items (
@@ -37,7 +38,10 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 """
 
-_COLS = "id, user_id, name, comment, status, total_cents, created_at, pending_panel_sync"
+_COLS = (
+    "id, user_id, name, comment, status, total_cents, created_at, "
+    "pending_panel_sync, panel_order_id"
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class Order:
     created_at: str  # ISO 8601, UTC
     pending_panel_sync: bool = False
     items: tuple[OrderItem, ...] = ()
+    panel_order_id: int | None = None  # id заказа в панели; None — в панель не попал
 
 
 class OrdersRepo:
@@ -70,6 +75,14 @@ class OrdersRepo:
         with self._lock:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Добавить колонки, появившиеся после первых версий файла."""
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(orders)")}
+        if "panel_order_id" not in columns:
+            self._conn.execute("ALTER TABLE orders ADD COLUMN panel_order_id INTEGER")
+            self._conn.commit()
 
     def _items(self, order_id: int) -> tuple[OrderItem, ...]:
         rows = self._conn.execute(
@@ -82,10 +95,10 @@ class OrdersRepo:
     @staticmethod
     def _row_to_order(row: tuple, items: tuple[OrderItem, ...] = ()) -> "Order":
         # row columns: id, user_id, name, comment, status, total_cents, created_at,
-        #              pending_panel_sync
-        id_, user_id, name, comment, status, total_cents, created_at, pps = row
+        #              pending_panel_sync, panel_order_id
+        id_, user_id, name, comment, status, total_cents, created_at, pps, panel_id = row
         return Order(id_, user_id, name, comment, status, total_cents, created_at,
-                     bool(pps), items)
+                     bool(pps), items, panel_id)
 
     def _create(
         self, user_id: int, name: str, comment: str, items: Sequence[OrderItem], token: str,
@@ -137,6 +150,39 @@ class OrdersRepo:
                 return None
             return self._row_to_order(row, self._items(row[0]))
 
+    def _get_by_id(self, order_id: int) -> Order | None:
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_COLS} FROM orders WHERE id=?", (order_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self._row_to_order(row, self._items(row[0]))
+
+    def _set_panel_order_id(self, order_id: int, panel_order_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE orders SET panel_order_id=? WHERE id=?", (panel_order_id, order_id)
+            )
+
+    def _set_status(self, order_id: int, status: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+
+    def _count_by_status(self) -> dict[str, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) FROM orders GROUP BY status"
+            ).fetchall()
+        return {status: count for status, count in rows}
+
+    def _count_unsynced(self) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE pending_panel_sync=1"
+            ).fetchone()
+        return int(row[0])
+
     def _mark_synced(self, order_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute(
@@ -173,6 +219,23 @@ class OrdersRepo:
     async def get(self, order_id: int, user_id: int) -> Order | None:
         """Заказ с составом; чужой заказ не отдаётся."""
         return await asyncio.to_thread(self._get, order_id, user_id)
+
+    async def get_by_id(self, order_id: int) -> Order | None:
+        """Заказ с составом без проверки владельца. Только для сценария владельца пекарни."""
+        return await asyncio.to_thread(self._get_by_id, order_id)
+
+    async def set_panel_order_id(self, order_id: int, panel_order_id: int) -> None:
+        await asyncio.to_thread(self._set_panel_order_id, order_id, panel_order_id)
+
+    async def set_status(self, order_id: int, status: str) -> None:
+        await asyncio.to_thread(self._set_status, order_id, status)
+
+    async def count_by_status(self) -> dict[str, int]:
+        return await asyncio.to_thread(self._count_by_status)
+
+    async def count_unsynced(self) -> int:
+        """Сколько заказов ещё не отправлено в панель."""
+        return await asyncio.to_thread(self._count_unsynced)
 
     async def close(self) -> None:
         with self._lock:

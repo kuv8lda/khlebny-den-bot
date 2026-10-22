@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 
 from aiogram import Bot, Dispatcher
@@ -9,6 +10,8 @@ from .checkout import router as checkout_router
 from .config import Settings
 from .handlers import router
 from .orders import OrdersRepo
+from .owner import notify_owners
+from .owner import router as owner_router
 from .panel import PanelClient
 from .storage import SqliteStorage
 
@@ -26,9 +29,20 @@ async def main() -> None:
             settings.panel_timeout_seconds,
         )
     bot = Bot(settings.bot_token.get_secret_value())
-    dp = Dispatcher(storage=storage, orders=orders, panel_client=panel_client)
+    owner_ids = settings.owner_ids
+    if owner_ids and panel_client is None:
+        logging.warning("OWNER_TELEGRAM_IDS задан, но PANEL_API_KEY пуст: кнопок статусов не будет")
+    owner_notifier = functools.partial(notify_owners, bot, owner_ids) if owner_ids else None
+    dp = Dispatcher(
+        storage=storage,
+        orders=orders,
+        panel_client=panel_client,
+        owner_ids=owner_ids,
+        owner_notifier=owner_notifier,
+    )
     # Порядок важен: общие команды и кнопки меню срабатывают раньше шагов оформления.
     dp.include_router(router)
+    dp.include_router(owner_router)
     dp.include_router(checkout_router)
     await bot.set_my_commands(
         [
