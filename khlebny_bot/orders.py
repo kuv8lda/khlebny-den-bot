@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS orders (
     panel_order_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
+CREATE TABLE IF NOT EXISTS panel_events_cursor (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_event_id INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO panel_events_cursor VALUES (1, 0);
 CREATE TABLE IF NOT EXISTS order_items (
     order_id INTEGER NOT NULL REFERENCES orders(id),
     item_id INTEGER NOT NULL,
@@ -236,6 +241,40 @@ class OrdersRepo:
     async def count_unsynced(self) -> int:
         """Сколько заказов ещё не отправлено в панель."""
         return await asyncio.to_thread(self._count_unsynced)
+
+    def _get_by_panel_id(self, panel_order_id: int) -> Order | None:
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_COLS} FROM orders WHERE panel_order_id=?", (panel_order_id,)
+            ).fetchone()
+            return self._row_to_order(row) if row else None
+
+    def _event_cursor(self) -> int:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT last_event_id FROM panel_events_cursor WHERE id=1"
+            ).fetchone()[0]
+
+    def _ack_event(self, event_id: int, order_id: int | None, status: str) -> None:
+        with self._lock, self._conn:
+            if order_id is not None:
+                self._conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+            self._conn.execute(
+                "UPDATE panel_events_cursor SET last_event_id=MAX(last_event_id, ?) WHERE id=1",
+                (event_id,),
+            )
+
+    async def get_by_panel_id(self, panel_order_id: int) -> Order | None:
+        return await asyncio.to_thread(self._get_by_panel_id, panel_order_id)
+
+    async def event_cursor(self) -> int:
+        return await asyncio.to_thread(self._event_cursor)
+
+    async def ack_event(
+        self, event_id: int, order_id: int | None = None, status: str = ""
+    ) -> None:
+        """Зафиксировать обработку события и локальный статус одной транзакцией."""
+        await asyncio.to_thread(self._ack_event, event_id, order_id, status)
 
     async def close(self) -> None:
         with self._lock:

@@ -73,6 +73,15 @@ ORDER_LINE = "№{id} · {date} · {total} · {status}"
 ORDER_TITLE = "Заказ №{id} · {status}"
 ORDER_DATE_LINE = "Дата: {date}"
 ORDER_NOT_FOUND = "Заказ не найден"
+ORDER_STATUS_NOTIFICATION = "Заказ №{id}: {status}"
+EVENT_STATUS_NAMES = {
+    "pending": "Ожидает оплаты",
+    "paid": "Оплачен",
+    "shipped": "Передан в доставку",
+    "completed": "Выполнен",
+    "cancelled": "Отменён",
+}
+
 STATUS_NAMES = {
     "new": "новый",
     "pending": "ожидает оплаты",

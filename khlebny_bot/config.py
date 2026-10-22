@@ -1,4 +1,4 @@
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     panel_api_key: SecretStr = SecretStr("")
     panel_timeout_seconds: float = 5
     catalog_ttl_seconds: float = 60
+    events_poll_interval: float = Field(default=5, gt=0, allow_inf_nan=False)
 
     # Telegram ID владельцев через запятую. Пусто: уведомлений и команды /owner нет.
     owner_telegram_ids: str = ""

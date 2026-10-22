@@ -8,6 +8,7 @@ from aiogram.types import BotCommand
 from . import texts
 from .checkout import router as checkout_router
 from .config import Settings
+from .events import EventsWorker
 from .handlers import router
 from .orders import OrdersRepo
 from .owner import notify_owners
@@ -44,22 +45,34 @@ async def main() -> None:
     dp.include_router(router)
     dp.include_router(owner_router)
     dp.include_router(checkout_router)
-    await bot.set_my_commands(
-        [
-            BotCommand(command="menu", description=texts.CMD_MENU),
-            BotCommand(command="cart", description=texts.CMD_CART),
-            BotCommand(command="cancel", description=texts.CMD_CANCEL),
-            BotCommand(command="help", description=texts.CMD_HELP),
-        ]
+    worker = (
+        EventsWorker(bot, panel_client, orders, settings.events_poll_interval)
+        if panel_client is not None else None
     )
+    worker_task = None
     try:
-        await dp.start_polling(bot)
+        await bot.set_my_commands(
+            [
+                BotCommand(command="menu", description=texts.CMD_MENU),
+                BotCommand(command="cart", description=texts.CMD_CART),
+                BotCommand(command="cancel", description=texts.CMD_CANCEL),
+                BotCommand(command="help", description=texts.CMD_HELP),
+            ]
+        )
+        if worker is not None:
+            worker_task = asyncio.create_task(worker.run(), name="panel-events")
+        await dp.start_polling(bot, close_bot_session=False)
     finally:
-        if panel_client is not None:
-            await panel_client.aclose()
-        await orders.close()
-        await storage.close()
-        await bot.session.close()
+        try:
+            if worker is not None and worker_task is not None:
+                worker.stop()
+                await worker_task
+        finally:
+            if panel_client is not None:
+                await panel_client.aclose()
+            await orders.close()
+            await storage.close()
+            await bot.session.close()
 
 
 if __name__ == "__main__":

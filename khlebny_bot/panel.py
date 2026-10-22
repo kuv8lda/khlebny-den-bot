@@ -22,6 +22,7 @@ from .config import Settings
 
 log = logging.getLogger(__name__)
 
+EVENTS_PATH = "/api/integrations/events"
 CATALOG_PATH = "/api/integrations/catalog"
 ORDERS_PATH = "/api/integrations/orders"
 ORDER_STATUS_PATH = ORDERS_PATH + "/{order_id}/status"
@@ -88,6 +89,16 @@ class PanelOrderResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PanelEvent(BaseModel):
+    id: StrictInt = Field(ge=1)
+    order_id: StrictInt = Field(ge=1)
+    status: str = Field(min_length=1)
+    created_at: str
+
+
+_EVENTS_ADAPTER = TypeAdapter(list[PanelEvent])
+
+
 class PanelClient:
     def __init__(
         self,
@@ -102,6 +113,29 @@ class PanelClient:
             timeout=timeout,
             headers={"Authorization": f"Bearer {api_key}"},
         )
+
+    async def fetch_events(self, since_id: int, limit: int = 50) -> list[PanelEvent]:
+        """События Telegram-заказов после курсора, по возрастанию id."""
+        try:
+            response = await self._client.get(
+                EVENTS_PATH, params={"since_id": since_id, "limit": limit}
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise PanelError(f"panel returned HTTP {exc.response.status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise PanelError(f"panel events request failed: {type(exc).__name__}") from exc
+        except ValueError as exc:
+            raise PanelError("panel returned invalid JSON") from exc
+        try:
+            events = _EVENTS_ADAPTER.validate_python(payload)
+        except ValidationError as exc:
+            raise PanelError("unexpected events format") from exc
+        ids = [event.id for event in events]
+        if ids != sorted(set(ids)):
+            raise PanelError("event ids must be unique and ordered")
+        return events
 
     async def fetch_catalog(self) -> list[dict]:
         try:
