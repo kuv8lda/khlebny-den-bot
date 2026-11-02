@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import respx
-from helpers import make_callback, make_message, make_state
+from helpers import make_callback, make_checkout_callback, make_message, make_state
 
 from khlebny_bot import checkout, texts
 from khlebny_bot.orders import OrderItem, OrderRateLimitError, OrdersRepo
@@ -47,7 +47,7 @@ async def test_validation_error_is_not_retried():
         await client.aclose()
 
 
-async def test_checkout_failure_preserves_cart_and_retries_same_order(tmp_path):
+async def test_checkout_failure_finishes_checkout_and_retries_saved_order(tmp_path):
     repo = OrdersRepo(tmp_path / "orders.db")
     state = make_state()
     panel = AsyncMock(spec=PanelClient)
@@ -56,12 +56,17 @@ async def test_checkout_failure_preserves_cart_and_retries_same_order(tmp_path):
         await state.update_data(cart={"1": 2})
         await checkout.on_checkout_start(make_callback(), state)
         await checkout.on_name(make_message("Аня"), state)
-        await checkout.on_skip(make_callback(), state)
+        await checkout.on_skip(await make_checkout_callback(state, "skip"), state)
         saved = await state.get_data()
-        await checkout.on_confirm(make_callback(), state, repo, panel)
-        assert await state.get_data() == saved
-        assert await state.get_state() == checkout.Checkout.confirm.state
-        await checkout.on_confirm(make_callback(), state, repo, panel)
+        await checkout.on_confirm(
+            await make_checkout_callback(state, "confirm"), state, repo, panel
+        )
+        assert (await state.get_data())["cart"] == {}
+        assert await state.get_state() is None
+        order = (await repo.list_for_user(1))[0]
+        await checkout.on_order_retry(
+            make_callback(), checkout.RetryOrderCb(order_id=order.id), repo, panel
+        )
         assert len(await repo.list_for_user(1)) == 1
         assert [c.kwargs["idempotency_key"] for c in panel.create_order.await_args_list] == [
             saved["checkout"]["token"]

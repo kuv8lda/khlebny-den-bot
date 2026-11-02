@@ -9,17 +9,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from helpers import make_message, make_state
 
-from khlebny_bot import texts
 from khlebny_bot.orders import OrderItem, OrdersRepo
 from khlebny_bot.panel import PanelClient, PanelError
-from khlebny_bot.privacy import CleanupWorker, cmd_forget, cmd_privacy
+from khlebny_bot.privacy import CleanupWorker, cmd_forget, cmd_privacy, render_privacy
 from khlebny_bot.storage import SqliteStorage
 
 
 async def test_privacy():
     message = make_message()
     await cmd_privacy(message)
-    message.answer.assert_awaited_once_with(texts.PRIVACY)
+    text, markup = render_privacy("privacy")
+    message.answer.assert_awaited_once_with(text, reply_markup=markup)
 
 
 @pytest.mark.parametrize("panel_status", [None, "ok", "failed"])
@@ -50,15 +50,15 @@ async def test_forget(tmp_path, panel_status):
         assert await orders.get_by_id(foreign.id) is not None
         assert await orders.event_cursor() == 15
         with sqlite3.connect(tmp_path / "orders.db") as conn:
-            assert conn.execute(
-                "SELECT COUNT(*) FROM order_items WHERE order_id=?", (own.id,)
-            ).fetchone()[0] == 0
-        expected = {
-            None: texts.FORGET_DONE,
-            "ok": texts.FORGET_DONE_PANEL,
-            "failed": texts.FORGET_PANEL_FAILED,
-        }[panel_status]
-        message.answer.assert_awaited_once_with(expected)
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM order_items WHERE order_id=?", (own.id,)
+                ).fetchone()[0]
+                == 0
+            )
+        document = {None: "local", "ok": "panel", "failed": "failed"}[panel_status]
+        expected, markup = render_privacy(document)
+        message.answer.assert_awaited_once_with(expected, reply_markup=markup)
         if panel is not None:
             panel.forget.assert_awaited_once_with(1)
         await cmd_forget(message, state, orders, panel)
@@ -142,9 +142,11 @@ async def test_panel_forget_failed_confirmation(failure):
     if failure == "network":
         route.mock(side_effect=httpx.ConnectError("offline"))
     else:
-        route.mock(return_value=httpx.Response(
-            200, text="not json" if failure == "invalid" else '{"ok": false}'
-        ))
+        route.mock(
+            return_value=httpx.Response(
+                200, text="not json" if failure == "invalid" else '{"ok": false}'
+            )
+        )
     client = PanelClient("https://panel.test", "key")
     try:
         with pytest.raises(PanelError):

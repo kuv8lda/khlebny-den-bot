@@ -20,13 +20,15 @@ async def test_start_shows_buttons_and_demo_note():
     assert labels == [texts.BTN_MENU, texts.BTN_CART, texts.BTN_ORDERS]
 
 
-async def test_menu_has_nine_items_with_prices():
+async def test_menu_shows_five_items_with_prices_and_navigation():
     msg = make_message()
     await h.cmd_menu(msg)
     markup = msg.answer.call_args.kwargs["reply_markup"]
     buttons = [b for row in markup.inline_keyboard for b in row]
-    assert len(buttons) == 9
-    assert all("₽" in b.text for b in buttons)
+    products = [b for b in buttons if b.callback_data.startswith("m2:")]
+    assert len(products) == 5
+    assert all("₽" in b.text for b in products)
+    assert any(b.callback_data.startswith("mp:") for b in buttons)
 
 
 async def test_add_item_to_cart():

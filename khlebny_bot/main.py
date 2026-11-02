@@ -3,11 +3,15 @@ import functools
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand
 
 from . import texts
+from .catalog import CATALOG
 from .checkout import router as checkout_router
+from .competitor import CompetitorRepo, CompetitorWorker
+from .competitor import router as competitor_router
 from .config import Settings
 from .events import EventsWorker
 from .handlers import router
@@ -19,6 +23,51 @@ from .privacy import CleanupWorker
 from .privacy import router as privacy_router
 from .reliability import TrafficMiddleware
 from .storage import SqliteStorage
+
+
+async def wait_for_telegram(bot: Bot) -> None:
+    """Keep startup alive while Telegram is temporarily unreachable."""
+    delay = 1
+    while True:
+        try:
+            await bot.get_me(request_timeout=10)
+            return
+        except (TelegramNetworkError, TelegramServerError, TelegramRetryAfter) as exc:
+            wait = exc.retry_after if isinstance(exc, TelegramRetryAfter) else delay
+            logging.warning(
+                "Telegram недоступен (%s). Повтор подключения через %s с.",
+                type(exc).__name__,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            delay = min(delay * 2, 30)
+
+
+async def set_commands_with_retry(bot: Bot) -> None:
+    """Configure Telegram commands without making a transient outage fatal."""
+    commands = [
+        BotCommand(command="menu", description=texts.CMD_MENU),
+        BotCommand(command="cart", description=texts.CMD_CART),
+        BotCommand(command="orders", description=texts.BTN_ORDERS),
+        BotCommand(command="cancel", description=texts.CMD_CANCEL),
+        BotCommand(command="help", description=texts.CMD_HELP),
+        BotCommand(command="privacy", description=texts.CMD_PRIVACY),
+        BotCommand(command="forget", description=texts.CMD_FORGET),
+    ]
+    delay = 1
+    while True:
+        try:
+            await bot.set_my_commands(commands, request_timeout=10)
+            return
+        except (TelegramNetworkError, TelegramServerError, TelegramRetryAfter) as exc:
+            wait = exc.retry_after if isinstance(exc, TelegramRetryAfter) else delay
+            logging.warning(
+                "Не удалось настроить команды Telegram (%s). Повтор через %s с.",
+                type(exc).__name__,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            delay = min(delay * 2, 30)
 
 
 async def main() -> None:
@@ -56,6 +105,7 @@ async def main() -> None:
     dp.shutdown.register(traffic.drain)
     # Порядок важен: общие команды и кнопки меню срабатывают раньше шагов оформления.
     dp.include_router(router)
+    dp.include_router(competitor_router)
     dp.include_router(owner_router)
     dp.include_router(privacy_router)
     dp.include_router(checkout_router)
@@ -64,23 +114,32 @@ async def main() -> None:
         if panel_client is not None
         else None
     )
+    competitor_repo = None
+    competitor_worker = None
+    competitor_task = None
+    if panel_client is not None and owner_ids:
+        competitor_repo = CompetitorRepo(settings.orders_path)
+        competitor_worker = CompetitorWorker(
+            bot,
+            panel_client,
+            competitor_repo,
+            owner_ids,
+            settings.events_poll_interval,
+        )
     cleanup = CleanupWorker(storage, orders=orders)
     cleanup_task = None
     worker_task = None
     try:
-        await bot.set_my_commands(
-            [
-                BotCommand(command="menu", description=texts.CMD_MENU),
-                BotCommand(command="cart", description=texts.CMD_CART),
-                BotCommand(command="cancel", description=texts.CMD_CANCEL),
-                BotCommand(command="help", description=texts.CMD_HELP),
-                BotCommand(command="privacy", description=texts.CMD_PRIVACY),
-                BotCommand(command="forget", description=texts.CMD_FORGET),
-            ]
-        )
+        if panel_client is not None:
+            # Stale product IDs may point to different products.
+            CATALOG[:] = await panel_client.fetch_catalog()
+        await storage.sync_catalog(CATALOG)
+        await set_commands_with_retry(bot)
         cleanup_task = asyncio.create_task(cleanup.run(), name="privacy-cleanup")
         if worker is not None:
             worker_task = asyncio.create_task(worker.run(), name="panel-events")
+        if competitor_worker is not None:
+            competitor_task = asyncio.create_task(competitor_worker.run(), name="competitor-prices")
         await dp.start_polling(bot, close_bot_session=False)
     finally:
         try:
@@ -88,10 +147,16 @@ async def main() -> None:
             cleanup.stop()
             if cleanup_task is not None:
                 await cleanup_task
+            if competitor_worker is not None:
+                competitor_worker.stop()
+                if competitor_task is not None:
+                    await competitor_task
             if worker is not None and worker_task is not None:
                 worker.stop()
                 await worker_task
         finally:
+            if competitor_repo is not None:
+                await competitor_repo.close()
             if panel_client is not None:
                 await panel_client.aclose()
             await orders.close()

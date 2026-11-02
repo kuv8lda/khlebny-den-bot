@@ -46,8 +46,9 @@ async def test_fetch_events_cursor_and_auth():
 
 
 @respx.mock
-@pytest.mark.parametrize("payload", [{}, [dict(id="1")], [event(2).model_dump(),
-                                                           event(1).model_dump()]])
+@pytest.mark.parametrize(
+    "payload", [{}, [dict(id="1")], [event(2).model_dump(), event(1).model_dump()]]
+)
 async def test_bad_events_response(payload):
     respx.get(URL).respond(200, json=payload)
     client = PanelClient("http://panel", "secret")
@@ -83,7 +84,10 @@ async def test_notification_and_status(setup, status):
     await worker.poll_once()
     panel.fetch_events.assert_awaited_once_with(0, limit=50)
     bot.send_message.assert_awaited_once_with(
-        chat_id=42, text=f"Заказ №{order.id}: {texts.EVENT_STATUS_NAMES[status]}"
+        chat_id=42,
+        text=texts.ORDER_STATUS_NOTIFICATION.format(
+            id=order.id, status=texts.EVENT_STATUS_NAMES[status]
+        ),
     )
     assert (await repo.get(order.id, 42)).status == status
     assert await repo.event_cursor() == 1
@@ -116,9 +120,11 @@ async def test_unknown_order_and_status_are_skipped(setup):
 async def test_transient_telegram_failure_keeps_cursor(setup):
     worker, repo, bot, panel, _ = setup
     panel.fetch_events.return_value = [event(1), event(2, "shipped")]
-    bot.send_message.side_effect = [None, TelegramNetworkError(
-        method=SendMessage(chat_id=42, text="test"), message="offline"
-    ), None]
+    bot.send_message.side_effect = [
+        None,
+        TelegramNetworkError(method=SendMessage(chat_id=42, text="test"), message="offline"),
+        None,
+    ]
     with pytest.raises(TelegramNetworkError):
         await worker.poll_once()
     assert await repo.event_cursor() == 1
@@ -130,9 +136,10 @@ async def test_transient_telegram_failure_keeps_cursor(setup):
 async def test_blocked_bot_does_not_block_stream(setup):
     worker, repo, bot, panel, _ = setup
     panel.fetch_events.return_value = [event(1), event(2)]
-    bot.send_message.side_effect = [TelegramForbiddenError(
-        method=SendMessage(chat_id=42, text="test"), message="blocked"
-    ), None]
+    bot.send_message.side_effect = [
+        TelegramForbiddenError(method=SendMessage(chat_id=42, text="test"), message="blocked"),
+        None,
+    ]
     await worker.poll_once()
     assert await repo.event_cursor() == 2
 

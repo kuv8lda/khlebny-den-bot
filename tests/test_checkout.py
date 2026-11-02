@@ -1,5 +1,5 @@
 import pytest
-from helpers import make_callback, make_message, make_state
+from helpers import make_callback, make_checkout_callback, make_message, make_state
 
 from khlebny_bot import cart as cart_logic
 from khlebny_bot import checkout as co
@@ -74,6 +74,7 @@ async def test_full_path_creates_order_and_clears_cart(orders):
         assert part in screen
 
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "confirm")).data
     await co.on_confirm(cb, state, orders)
     (order,) = await user_orders(orders)
     assert order.status == "new"
@@ -89,10 +90,11 @@ async def test_skip_comment(orders):
     state = make_state()
     await go_to("comment", state)
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "skip")).data
     await co.on_skip(cb, state)
     assert await state.get_state() == Checkout.confirm.state
     cb.message.edit_reply_markup.assert_awaited_once()
-    await co.on_confirm(make_callback(), state, orders)
+    await co.on_confirm(await make_checkout_callback(state, "confirm"), state, orders)
     (order,) = await user_orders(orders)
     assert order.comment == ""
 
@@ -118,9 +120,7 @@ async def test_invalid_comment_keeps_state(bad):
     await co.on_comment(msg, state)
     assert await state.get_state() == Checkout.comment.state
     assert await state.get_data() == before
-    assert msg.answer.call_args.args[0] == texts.CHECKOUT_COMMENT_INVALID.format(
-        max=co.COMMENT_MAX
-    )
+    assert msg.answer.call_args.args[0] == texts.CHECKOUT_COMMENT_INVALID.format(max=co.COMMENT_MAX)
 
 
 async def test_limits_are_inclusive():
@@ -148,6 +148,7 @@ async def test_cancel_button_on_confirm_screen(orders):
     state = make_state()
     await go_to("confirm", state)
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "cancel")).data
     await co.on_cancel_button(cb, state)
     assert await state.get_state() is None
     assert (await state.get_data())["cart"] == CART
@@ -159,7 +160,7 @@ async def test_order_total_matches_cart_total(orders):
     state = make_state()
     await go_to("confirm", state, cart)
     cart_total = cart_logic.total_cents(cart)
-    await co.on_confirm(make_callback(), state, orders)
+    await co.on_confirm(await make_checkout_callback(state, "confirm"), state, orders)
     (order,) = await user_orders(orders)
     assert order.total_cents == cart_total
     full = await orders.get(order.id, 1)
@@ -170,26 +171,28 @@ async def test_catalog_change_does_not_touch_saved_order(orders, monkeypatch):
     state = make_state()
     await go_to("confirm", state)
     old_name, old_price = CATALOG[0]["name"], CATALOG[0]["price_cents"]
-    await co.on_confirm(make_callback(), state, orders)
+    old_total = cart_logic.total_cents(CART)
+    await co.on_confirm(await make_checkout_callback(state, "confirm"), state, orders)
     monkeypatch.setitem(CATALOG[0], "name", "Новое название")
     monkeypatch.setitem(CATALOG[0], "price_cents", 1)
     (order,) = await user_orders(orders)
     full = await orders.get(order.id, 1)
     first = next(i for i in full.items if i.item_id == CATALOG[0]["id"])
     assert (first.name, first.price_cents) == (old_name, old_price)
-    assert full.total_cents == 14000 * 2 + 11000
+    assert full.total_cents == old_total
 
 
 async def test_repeated_confirm_does_not_duplicate(orders):
     state = make_state()
     await go_to("confirm", state)
     saved_data, saved_state = await state.get_data(), await state.get_state()
-    await co.on_confirm(make_callback(), state, orders)
+    await co.on_confirm(await make_checkout_callback(state, "confirm"), state, orders)
     (order,) = await user_orders(orders)
     # Повтор: например, ответ Telegram потерялся или нажали дважды.
     await state.set_data(saved_data)
     await state.set_state(saved_state)
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "confirm")).data
     await co.on_confirm(cb, state, orders)
     assert len(await user_orders(orders)) == 1
     assert cb.message.edit_text.call_args.args[0] == texts.ORDER_ALREADY.format(id=order.id)
@@ -223,8 +226,10 @@ async def test_my_orders_lists_latest_five_newest_first(orders):
     assert [co.OrderCb.unpack(b.callback_data).order_id for b in buttons] == [
         o.id for o in reversed(made[2:])
     ]
-    assert f"№{made[-1].id}" in text and f"№{made[0].id}" not in text
-    assert "280 ₽" in text and "новый" in text
+    assert len(text.splitlines()) <= 4
+    labels = "\n".join(b.text for b in buttons)
+    assert f"№{made[-1].id}" in labels and f"№{made[0].id} ·" not in labels
+    assert "280 ₽" in labels and "новый" in labels
 
 
 async def test_my_orders_only_own(orders):
@@ -232,8 +237,10 @@ async def test_my_orders_only_own(orders):
     theirs = await make_order(orders, 2, "b")
     msg = make_message(texts.BTN_ORDERS, user_id=1)
     await co.cmd_orders(msg, orders)
-    text = msg.answer.call_args.args[0]
-    assert f"№{mine.id}" in text and f"№{theirs.id}" not in text
+    markup = msg.answer.call_args.kwargs["reply_markup"]
+    ids = [co.OrderCb.unpack(row[0].callback_data).order_id for row in markup.inline_keyboard]
+    assert ids == [mine.id]
+    assert theirs.id not in ids
 
 
 async def test_open_order_shows_items_and_hides_foreign(orders):
@@ -265,14 +272,14 @@ async def test_checkout_state_and_orders_survive_restart(tmp_path):
     storage, orders = open_all()
     state = make_state(storage)
     assert await state.get_state() == Checkout.comment.state
-    await co.on_skip(make_callback(), state)
+    await co.on_skip(await make_checkout_callback(state, "skip"), state)
     await storage.close()
     await orders.close()
 
     storage, orders = open_all()
     state = make_state(storage)
     assert await state.get_state() == Checkout.confirm.state
-    await co.on_confirm(make_callback(), state, orders)
+    await co.on_confirm(await make_checkout_callback(state, "confirm"), state, orders)
     await storage.close()
     await orders.close()
 

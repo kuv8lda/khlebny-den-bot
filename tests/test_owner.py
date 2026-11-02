@@ -8,7 +8,7 @@ import pytest
 import respx
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
-from helpers import make_callback, make_message, make_state
+from helpers import make_callback, make_checkout_callback, make_message, make_state
 
 from khlebny_bot import checkout as co
 from khlebny_bot import owner, texts
@@ -214,9 +214,11 @@ async def test_repo_status_counters_and_lookup(orders):
 async def test_buttons_follow_fsm(orders, status, expected):
     order = await make_order(orders, status=status, panel_id=9)
     markup = owner.owner_keyboard(order)
-    got = [] if markup is None else [
-        OwnerCb.unpack(row[0].callback_data).status for row in markup.inline_keyboard
-    ]
+    got = (
+        []
+        if markup is None
+        else [OwnerCb.unpack(row[0].callback_data).status for row in markup.inline_keyboard]
+    )
     assert got == expected
 
 
@@ -239,7 +241,8 @@ async def test_no_buttons_without_panel_id(orders):
 
 async def test_card_has_all_fields(orders):
     order = await make_order(orders, panel_id=9)
-    text = owner.render_owner_order(order)
+    pages = (len(owner._owner_lines(order)) + 1) // 2
+    text = "\n".join(owner.render_owner_order(order, page) for page in range(pages))
     assert f"№{order.id}" in text
     assert "ожидает оплаты" in text
     assert "Аня" in text
@@ -281,10 +284,14 @@ async def _confirm(orders, notifier, panel_client, *, text_name="Аня"):
     await state.update_data(cart={"1": 2, "3": 1})
     await co.on_checkout_start(make_callback(), state)
     await co.on_name(make_message(text_name), state)
-    await co.on_skip(make_callback(), state)
+    await co.on_skip(await make_checkout_callback(state, "skip"), state)
     saved = (await state.get_data(), await state.get_state())
     await co.on_confirm(
-        make_callback(), state, orders, panel_client=panel_client, owner_notifier=notifier
+        await make_checkout_callback(state, "confirm"),
+        state,
+        orders,
+        panel_client=panel_client,
+        owner_notifier=notifier,
     )
     return state, saved
 
@@ -325,7 +332,9 @@ async def test_duplicate_confirm_does_not_notify_again(orders):
     state, (data, fsm_state) = await _confirm(orders, notifier, None)
     await state.set_data(data)
     await state.set_state(fsm_state)
-    await co.on_confirm(make_callback(), state, orders, owner_notifier=notifier)
+    await co.on_confirm(
+        await make_checkout_callback(state, "confirm"), state, orders, owner_notifier=notifier
+    )
     notifier.assert_awaited_once()
 
 
@@ -351,11 +360,15 @@ async def test_press_patches_panel_and_updates_message(orders):
     new_text = cb.message.edit_text.await_args.args[0]
     assert "оплачен" in new_text
     markup = cb.message.edit_text.await_args.kwargs["reply_markup"]
-    assert [OwnerCb.unpack(r[0].callback_data).status for r in markup.inline_keyboard] == [
+    assert [
+        OwnerCb.unpack(r[0].callback_data).status
+        for r in markup.inline_keyboard
+        if r[0].callback_data.startswith("ow:")
+    ] == [
         "shipped",
         "cancelled",
     ]
-    cb.answer.assert_awaited_once_with(texts.OWNER_STATUS_CHANGED.format(status="оплачен"))
+    cb.answer.assert_awaited_once_with()
 
 
 async def test_final_status_removes_buttons(orders):
@@ -365,7 +378,9 @@ async def test_final_status_removes_buttons(orders):
 
     await owner.on_status(cb, data, orders, panel, OWNERS)
 
-    assert cb.message.edit_text.await_args.kwargs["reply_markup"] is None
+    markup = cb.message.edit_text.await_args.kwargs["reply_markup"]
+    assert markup is not None
+    assert all(b.callback_data.startswith("op:") for row in markup.inline_keyboard for b in row)
     assert "выполнен" in cb.message.edit_text.await_args.args[0]
 
 
@@ -376,7 +391,8 @@ async def test_conflict_409_shows_clear_text_and_keeps_status(orders):
 
     await owner.on_status(cb, data, orders, panel, OWNERS)
 
-    cb.answer.assert_awaited_once_with(texts.OWNER_CONFLICT, show_alert=True)
+    cb.answer.assert_awaited_once_with()
+    cb.message.answer.assert_awaited_once_with(texts.OWNER_CONFLICT)
     assert (await orders.get_by_id(order.id)).status == "new"
     cb.message.edit_text.assert_not_awaited()
 
@@ -388,10 +404,13 @@ async def test_conflict_with_known_current_status_refreshes_card(orders):
 
     await owner.on_status(cb, data, orders, panel, OWNERS)
 
-    cb.answer.assert_awaited_once_with(texts.OWNER_CONFLICT, show_alert=True)
+    cb.answer.assert_awaited_once_with()
+    cb.message.answer.assert_awaited_once_with(texts.OWNER_CONFLICT)
     assert (await orders.get_by_id(order.id)).status == "cancelled"
     assert "отменён" in cb.message.edit_text.await_args.args[0]
-    assert cb.message.edit_text.await_args.kwargs["reply_markup"] is None
+    markup = cb.message.edit_text.await_args.kwargs["reply_markup"]
+    assert markup is not None
+    assert all(b.callback_data.startswith("op:") for row in markup.inline_keyboard for b in row)
 
 
 async def test_panel_down_keeps_status(orders):
@@ -401,7 +420,8 @@ async def test_panel_down_keeps_status(orders):
 
     await owner.on_status(cb, data, orders, panel, OWNERS)
 
-    cb.answer.assert_awaited_once_with(texts.OWNER_PANEL_DOWN, show_alert=True)
+    cb.answer.assert_awaited_once_with()
+    cb.message.answer.assert_awaited_once_with(texts.OWNER_PANEL_DOWN)
     assert (await orders.get_by_id(order.id)).status == "new"
 
 

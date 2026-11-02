@@ -31,6 +31,33 @@ class SqliteStorage(BaseStorage):
                 # Возраст старых записей неизвестен: дать им полный срок хранения.
                 self._conn.execute("UPDATE fsm SET updated_at=?", (time.time(),))
 
+    def _sync_catalog(self, catalog: list[dict]) -> None:
+        signature = json.dumps(catalog, ensure_ascii=False, sort_keys=True)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS catalog_meta (id INTEGER PRIMARY KEY, signature TEXT)"
+            )
+            old = self._conn.execute("SELECT signature FROM catalog_meta WHERE id=1").fetchone()
+            if old is not None and old[0] == signature:
+                return
+            # Old item IDs can refer to entirely different products after a sync.
+            for key, raw in self._conn.execute("SELECT key,data FROM fsm").fetchall():
+                data = json.loads(raw)
+                data.pop("cart", None)
+                data.pop("checkout", None)
+                self._conn.execute(
+                    "UPDATE fsm SET data=?,state=NULL WHERE key=?",
+                    (json.dumps(data, ensure_ascii=False), key),
+                )
+            self._conn.execute(
+                "INSERT INTO catalog_meta(id,signature) VALUES(1,?) "
+                "ON CONFLICT(id) DO UPDATE SET signature=excluded.signature", (signature,),
+            )
+
+    async def sync_catalog(self, catalog: list[dict]) -> None:
+        """Сбросить незавершённые корзины при смене каталога; заказы не трогать."""
+        await asyncio.to_thread(self._sync_catalog, catalog)
+
     def _key(self, key: StorageKey) -> str:
         return self._keys.build(key, "data")
 

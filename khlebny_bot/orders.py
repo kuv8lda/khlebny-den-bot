@@ -256,6 +256,19 @@ class OrdersRepo:
             enforce_rate_limit,
         )
 
+    async def checkout_token(self, order_id: int, user_id: int) -> str | None:
+        """Ключ повторной отправки сохранённого заказа, доступный только владельцу."""
+
+        def read():
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT checkout_token FROM orders WHERE id=? AND user_id=?",
+                    (order_id, user_id),
+                ).fetchone()
+                return row[0] if row else None
+
+        return await asyncio.to_thread(read)
+
     async def mark_panel_synced(self, order_id: int) -> None:
         """Снять флаг pending_panel_sync после успешной отправки в панель."""
         await asyncio.to_thread(self._mark_synced, order_id)

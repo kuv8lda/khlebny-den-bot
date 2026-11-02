@@ -61,11 +61,6 @@ def parse_catalog(payload: object) -> list[dict]:
     return [item.model_dump() for item in items]
 
 
-# ---------------------------------------------------------------------------
-# Модели заказа
-# ---------------------------------------------------------------------------
-
-
 class OrderItemPayload(BaseModel):
     product_id: int
     quantity: int
@@ -84,11 +79,6 @@ class PanelOrderResult(BaseModel):
     duplicate: bool = False  # True если панель вернула 200 (дубль) или 409
 
 
-# ---------------------------------------------------------------------------
-# PanelClient
-# ---------------------------------------------------------------------------
-
-
 class PanelEvent(BaseModel):
     id: StrictInt = Field(ge=1)
     order_id: StrictInt = Field(ge=1)
@@ -97,6 +87,18 @@ class PanelEvent(BaseModel):
 
 
 _EVENTS_ADAPTER = TypeAdapter(list[PanelEvent])
+
+
+class CompetitorPrice(BaseModel):
+    competitor_id: StrictInt = Field(ge=1)
+    competitor_name: str = Field(min_length=1, max_length=200)
+    product_id: StrictInt = Field(ge=1)
+    product_name: str = Field(min_length=1, max_length=200)
+    price_cents: StrictInt = Field(ge=0)
+    own_price_cents: StrictInt | None = Field(default=None, ge=0)
+
+
+_COMPETITOR_ADAPTER = TypeAdapter(list[CompetitorPrice])
 
 
 class PanelClient:
@@ -149,6 +151,20 @@ class PanelClient:
         if ids != sorted(set(ids)):
             raise PanelError("event ids must be unique and ordered")
         return events
+
+    async def fetch_competitor_prices(self) -> list[CompetitorPrice]:
+        try:
+            response = await self._request("GET", "/api/integrations/competitor-prices")
+            response.raise_for_status()
+            prices = _COMPETITOR_ADAPTER.validate_python(response.json())
+        except httpx.HTTPError as exc:
+            raise PanelError("panel competitor prices request failed") from exc
+        except ValueError as exc:
+            raise PanelError("unexpected competitor prices format") from exc
+        keys = [(price.competitor_id, price.product_id) for price in prices]
+        if len(keys) != len(set(keys)):
+            raise PanelError("duplicate competitor product prices")
+        return prices
 
     async def fetch_catalog(self) -> list[dict]:
         try:

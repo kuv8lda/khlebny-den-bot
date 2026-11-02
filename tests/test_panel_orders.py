@@ -160,7 +160,7 @@ async def test_checkout_calls_panel_on_new_order(tmp_path):
     """on_confirm вызывает panel_client.create_order при создании нового заказа."""
     from unittest.mock import AsyncMock
 
-    from helpers import make_callback, make_state
+    from helpers import make_callback, make_checkout_callback, make_state
 
     from khlebny_bot import checkout as co
     from khlebny_bot.orders import OrdersRepo
@@ -177,6 +177,7 @@ async def test_checkout_calls_panel_on_new_order(tmp_path):
     await co.on_comment(make_message_text("Без глютена"), state)
 
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "confirm")).data
     await co.on_confirm(cb, state, orders, panel_client=mock_client)
 
     mock_client.create_order.assert_awaited_once()
@@ -193,7 +194,7 @@ async def test_checkout_panel_unavailable_sets_flag(tmp_path):
     """Если панель бросает PanelError — заказ создаётся локально с pending_panel_sync=1."""
     from unittest.mock import AsyncMock
 
-    from helpers import make_callback, make_state
+    from helpers import make_callback, make_checkout_callback, make_state
 
     from khlebny_bot import checkout as co
     from khlebny_bot.orders import OrdersRepo
@@ -206,9 +207,10 @@ async def test_checkout_panel_unavailable_sets_flag(tmp_path):
     await state.update_data(cart={"1": 2, "3": 1})
     await co.on_checkout_start(make_callback(), state)
     await co.on_name(make_message_text("Аня"), state)
-    await co.on_skip(make_callback(), state)  # комментарий пропускаем
+    await co.on_skip(await make_checkout_callback(state, "skip"), state)  # комментарий пропускаем
 
     cb = make_callback()
+    cb.data = (await make_checkout_callback(state, "confirm")).data
     await co.on_confirm(cb, state, orders, panel_client=mock_client)
 
     (order,) = await orders.list_for_user(1, 10)
@@ -221,7 +223,7 @@ async def test_checkout_panel_unavailable_sets_flag(tmp_path):
 
 async def test_checkout_no_panel_client_order_created(tmp_path):
     """Без panel_client заказ создаётся нормально, панель не вызывается."""
-    from helpers import make_callback, make_state
+    from helpers import make_callback, make_checkout_callback, make_state
 
     from khlebny_bot import checkout as co
     from khlebny_bot.orders import OrdersRepo
@@ -233,7 +235,9 @@ async def test_checkout_no_panel_client_order_created(tmp_path):
     await co.on_name(make_message_text("Аня"), state)
     await co.on_comment(make_message_text("Без глютена"), state)
 
-    await co.on_confirm(make_callback(), state, orders, panel_client=None)
+    await co.on_confirm(
+        await make_checkout_callback(state, "confirm"), state, orders, panel_client=None
+    )
 
     (order,) = await orders.list_for_user(1, 10)
     assert order.status == "new"
@@ -246,7 +250,7 @@ async def test_checkout_duplicate_confirm_does_not_call_panel(tmp_path):
     """Повторное подтверждение (тот же токен) не вызывает панель."""
     from unittest.mock import AsyncMock
 
-    from helpers import make_callback, make_state
+    from helpers import make_callback, make_checkout_callback, make_state
 
     from khlebny_bot import checkout as co
     from khlebny_bot.orders import OrdersRepo
@@ -259,19 +263,23 @@ async def test_checkout_duplicate_confirm_does_not_call_panel(tmp_path):
     await state.update_data(cart={"1": 2})
     await co.on_checkout_start(make_callback(), state)
     await co.on_name(make_message_text("Аня"), state)
-    await co.on_skip(make_callback(), state)  # комментарий пропускаем
+    await co.on_skip(await make_checkout_callback(state, "skip"), state)  # комментарий пропускаем
 
     # Сохраним состояние для повтора
     saved_data = await state.get_data()
     saved_fsm = await state.get_state()
 
-    await co.on_confirm(make_callback(), state, orders, panel_client=mock_client)
+    await co.on_confirm(
+        await make_checkout_callback(state, "confirm"), state, orders, panel_client=mock_client
+    )
     assert mock_client.create_order.call_count == 1
 
     # Симулируем повторное нажатие — восстанавливаем состояние
     await state.set_data(saved_data)
     await state.set_state(saved_fsm)
-    await co.on_confirm(make_callback(), state, orders, panel_client=mock_client)
+    await co.on_confirm(
+        await make_checkout_callback(state, "confirm"), state, orders, panel_client=mock_client
+    )
     # Второй вызов — заказ дубль (created=False), панель не должна вызываться
     assert mock_client.create_order.call_count == 1
 

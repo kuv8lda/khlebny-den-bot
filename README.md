@@ -2,105 +2,148 @@
 
 [![CI](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml)
 
-[Русский](README.ru.md) · [Deployment](docs/DEPLOY.md) · [MIT](LICENSE)
+[Русский](README.ru.md) · [Deployment guide (RU)](docs/DEPLOY.md) · [MIT](LICENSE)
 
-Demo Telegram bakery bot built with aiogram 3, Python 3.11+ and SQLite (long polling).
-The bakery is fictional: no real payments or fulfilment. Optional integration with
-`orders-admin-panel` provides order creation, owner status buttons and customer notifications.
-Stages 1–4 and D–H are implemented; live Telegram/panel acceptance remains a separate check.
+Telegram demo bot for the fictional bakery «Хлебный день», built with aiogram 3 and long polling. Orders have no real fulfilment or payments.
 
-## Quick start
+Customers browse the menu, edit their cart and confirm an order. The bot stores orders and conversation state in SQLite. Connect orders-admin-panel to send orders, receive status updates and let bakery owners change order statuses from Telegram.
+
+## Run
+
+You need Python 3.11+ and a bot token from @BotFather.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e ".[dev]"
 cp .env.example .env
-# Set BOT_TOKEN from @BotFather in .env, then:
+```
+
+Set `BOT_TOKEN` in `.env`, then run:
+
+```bash
 python -m khlebny_bot.main
 ```
 
-Leave `PANEL_API_KEY` empty for standalone mode. Never commit `.env`.
-For Docker or the two-service Compose deployment, follow [DEPLOY.md](docs/DEPLOY.md)
-first: Compose requires a separately built panel image and its configuration.
-
-## Features and commands
-
-- `/start`, `/help`: introduction and navigation.
-- `/menu`: nine demo products; `/cart`: quantities (1–20), totals and checkout.
-- Checkout: name (1–40 characters), optional comment (up to 200), confirmation.
-- “My orders” shows the latest five orders and their details.
-- `/cancel`: reset checkout without losing the cart.
-- `/owner`: owner-only local summary. New-order cards include status buttons when
-  the panel ID is known. Owners must first message the bot. Phone numbers are not collected.
-- `/privacy`: storage and disclosure notice; `/forget`: local deletion and a panel
-  anonymization request.
-
-Owner transitions: `pending → paid|cancelled`, `paid → shipped|cancelled`,
-`shipped → completed`. Unauthorized users cannot change statuses. HTTP 409 is
-explained to the owner without changing local state.
+For Docker or Compose, follow the [deployment guide](docs/DEPLOY.md). Compose requires a separate, prebuilt panel image.
 
 ## Configuration
 
-Environment variables override `.env` (see [.env.example](.env.example)).
+Set these variables in the environment or `.env` (gitignored):
 
-| Variable | Default / meaning |
-| --- | --- |
-| `BOT_TOKEN` | Required Telegram token |
-| `FSM_DB_PATH` | `data/fsm.sqlite3` |
-| `ORDERS_DB_PATH` | Empty: use the FSM database |
-| `PANEL_BASE_URL` | `http://127.0.0.1:5000` |
-| `PANEL_API_KEY` | Empty: disable panel integration |
-| `PANEL_TIMEOUT_SECONDS` | `5`, timeout per HTTP attempt |
-| `EVENTS_POLL_INTERVAL` | `5`, positive finite seconds |
-| `CATALOG_TTL_SECONDS` | `60`, catalog cache TTL |
-| `OWNER_TELEGRAM_IDS` | Empty; otherwise comma-separated Telegram IDs |
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOT_TOKEN` | Required | Telegram bot token |
+| `FSM_DB_PATH` | `data/fsm.sqlite3` | Conversation state and carts |
+| `ORDERS_DB_PATH` | Same as `FSM_DB_PATH` | Orders, event cursor and price notification state |
+| `PANEL_BASE_URL` | `http://127.0.0.1:5000` | Panel address reachable from the bot |
+| `PANEL_API_KEY` | Empty | Bearer token; leave empty to disable integration |
+| `PANEL_TIMEOUT_SECONDS` | `5` | Timeout per panel request attempt |
+| `EVENTS_POLL_INTERVAL` | `5` | Event and competitor-price polling interval, seconds; must be positive and finite |
+| `CATALOG_TTL_SECONDS` | `60` | Catalogue cache TTL, seconds |
+| `OWNER_TELEGRAM_IDS` | Empty | Comma-separated owner IDs, e.g. `123,456`; invalid values stop startup |
 
-Logging is currently fixed at INFO; the `LOG_LEVEL` settings field is not wired to startup.
-Compose overrides database paths to `/app/data/` and the panel URL to its service hostname.
-Compose-only settings are documented in the deployment guide.
+The bot logs at `INFO`; startup does not use the `LOG_LEVEL` setting.
 
-## Panel integration and reliability
+## Commands
 
-Requests use Bearer authentication. Endpoints:
+| Command | Action |
+|---|---|
+| `/start` | Show the menu, cart and order-history buttons |
+| `/menu` | Browse products, five per page; tap to add one |
+| `/cart` | Change quantities (1–20 per product), remove items or start checkout |
+| `/orders` | Show the last five orders and their details |
+| `/cancel` | Cancel unfinished checkout and keep the cart |
+| `/help` | Show command help |
+| `/privacy` | Read the data-storage policy |
+| `/forget` | Delete local customer data and request panel anonymisation |
+| `/owner` | Show the owner's order summary |
+| `/competitor` | Show competitor prices from the panel |
 
-- `GET /api/integrations/catalog`: catalog with TTL cache and stale/static fallback.
-- `POST /api/integrations/orders`: creation with the persisted checkout token as
-  `Idempotency-Key`; 200/409 are treated as duplicates.
-- `PATCH /api/integrations/orders/<id>/status`: owner transitions.
-- `GET /api/integrations/events?since_id=N&limit=50`: status polling, SQLite cursor.
-- `POST /api/integrations/forget`: anonymization request.
+Checkout asks for a name (1–40 characters), an optional comment (up to 200) and confirmation. The bot saves a snapshot of the products and prices shown at confirmation. It does not request a phone number.
 
-Network errors and HTTP 5xx receive up to three attempts with 0.25/0.5-second
-backoff; HTTP 4xx are not retried. On failure the local order is marked
-`pending_panel_sync`; the cart and confirmation remain intact. The customer must
-press Confirm again to resend the same order with the same key. There is no background outbox.
+Owner commands require an ID in `OWNER_TELEGRAM_IDS` and do not appear in the public Telegram command menu. Owners must message the bot before it can send them notifications.
 
-Checkout allows five new orders per user in a rolling hour. Persistent counters
-survive restarts and `/forget`; duplicate confirmation does not consume the quota.
-Messages/buttons are throttled to one event per user per 0.5 seconds.
-SIGTERM/SIGINT stop polling, drain handlers and stop workers before closing resources.
+## Catalogue
 
-Events notify customers about pending, paid, shipped, completed and cancelled orders.
-Already processed IDs are skipped. Delivery failures are retried on a later poll;
-blocked recipients are skipped. Unknown orders/statuses are logged and skipped.
-The cursor is saved **after** sending: a crash between Telegram delivery and SQLite
-commit can cause a duplicate. This is not an exactly-once guarantee.
-Run only one bot/event worker per token and database.
+The offline catalogue contains 20 demo products shared with the panel. Product ID 7 is retired.
+
+With integration enabled, the bot loads the panel catalogue before polling. If the request fails, startup fails to avoid sending orders with stale product IDs. Restart the bot after changing the panel's prices or assortment. Catalogue changes clear unfinished carts and checkouts; saved orders keep their snapshots. Open `/menu` to replace old buttons.
+
+## Panel integration
+
+The bot uses Bearer authentication for `/api/integrations/*`:
+
+- `GET /catalog`: product array with `id`, `name` and `price_cents`.
+- `POST /orders`: order creation with a saved checkout token as `Idempotency-Key`.
+- `GET /events?since_id=N&limit=50`: status events in ascending ID order.
+- `PATCH /orders/<id>/status`: owner action with `{"status": "..."}`.
+
+### Order delivery and retries
+
+The bot saves the order before sending it to the panel. Network errors and HTTP 5xx trigger up to three attempts, with delays of 0.25 and 0.5 seconds. Each attempt uses `PANEL_TIMEOUT_SECONDS`. The client treats HTTP 200/409 on order creation as a duplicate; it does not retry other HTTP 4xx responses.
+
+If delivery fails, the order keeps `pending_panel_sync=1`. The bot clears the cart and checkout, then offers «Повторить отправку» in the result message and order details. A retry sends the saved order with the same key. There is no background order-delivery queue.
+
+### Status notifications
+
+One event worker per order database polls the panel and sends customers status updates. It saves the event cursor and local order status in one transaction after sending the message. A crash between Telegram delivery and the SQLite commit can cause a duplicate notification.
+
+On a panel or Telegram error, the worker retries in the next cycle without advancing past the failed event. It skips blocked recipients, unknown orders and unknown statuses, logging the reason. Local updates appear in `/orders` and `/owner`.
+
+Owners receive new-order cards with available status actions:
+
+```text
+pending → paid or cancelled
+paid → shipped or cancelled
+shipped → completed
+```
+
+The local `new` status maps to `pending`. Orders without a panel ID have no status buttons. On HTTP 409, the bot reports the conflict and refreshes the card if the panel supplied its current status. Owner notification failures do not roll back a customer's order.
+
+### Competitor prices
+
+This feature requires `GET /api/integrations/competitor-prices` in the panel. Add it to panels that do not support it. The panel or its parser must match competitor products to local products.
+
+The endpoint returns an array:
+
+```json
+[
+  {
+    "competitor_id": 1,
+    "competitor_name": "Neighbour bakery",
+    "product_id": 2,
+    "product_name": "Croissant",
+    "price_cents": 22000,
+    "own_price_cents": 20000
+  }
+]
+```
+
+IDs must be positive integers, names must contain 1–200 characters and prices must be non-negative integers. `own_price_cents` is optional and may be null.
+
+A separate worker compares consecutive processed prices per owner and notifies them of changes **greater than 5%**. The first snapshot sets the baseline. A change of 5% or less updates the baseline without a notification. A zero baseline also updates without a percentage notification.
+
+SQLite stores each owner's baseline. Temporary Telegram failures leave that owner's notification for the next poll; blocked recipients are skipped. A crash after delivery but before saving can cause a duplicate. Polling cannot capture price changes between snapshots. Run one worker per database; there are no daily digests.
+
+`/competitor` reads the panel's current snapshot without changing notification state and reports missing data or panel errors.
 
 ## Privacy
 
-Local storage includes Telegram IDs, names, comments, order items/totals, carts,
-FSM data and the event cursor. `/forget` deletes local orders and FSM/cart data
-across chats and requests panel anonymization. On panel failure, local deletion
-has already happened; repeat the command later. There is no automatic retry queue.
+`/forget` deletes the customer's local orders, items, carts and FSM records across chats before requesting panel anonymisation. On a panel error, repeat the command later; there is no retry queue.
 
-The panel anonymizes name, phone and username, but retains Telegram ID, comments,
-orders, totals and events. Telegram messages and backups are not deleted.
-Inactive carts/FSM are removed after seven days, checked at startup and hourly.
-Orders have no automatic retention limit. Anti-abuse counters retain ID/time after
-`/forget` and are cleaned at startup/hourly when older than an hour (up to two hours
-while running). The privacy command discloses this exception.
+The panel clears the name, phone and username but retains Telegram ID, comments, orders, totals and events. The command does not delete Telegram messages or backups.
+
+Cleanup runs at startup and hourly. It removes carts and unfinished checkout data after seven days without changes. Migrated FSM records start a new retention period. Order history remains until `/forget`.
+
+Order-rate counters contain Telegram ID and timestamps. They survive `/forget` to prevent quota bypass and expire within two hours while the bot runs.
+
+## Limits and shutdown
+
+- Checkout allows five new orders per rolling hour. Retrying an existing order does not consume the quota. SQLite preserves counters across restarts.
+- Incoming messages and callbacks share a per-user limit of one event per 0.5 seconds. The bot ignores excess messages and answers excess callbacks with an explanation.
+- FSM isolation serialises actions for the same user in the same chat.
+- On SIGTERM/SIGINT, the bot stops polling, waits for handlers and workers, then closes sessions and databases.
 
 ## Development
 
@@ -109,11 +152,6 @@ ruff check .
 pytest -q
 ```
 
-Tests mock Telegram and HTTP; they do not require live credentials. CI tests Python
-3.11–3.13 and builds the Docker image, checking its non-root user and writable data
-volume. Dependency ranges live in `pyproject.toml`; there is no lock file.
+Tests use mocks and do not require network access. CI runs Ruff and pytest on Python 3.11, 3.12 and 3.13, then builds a Docker image and checks non-root volume writes. Dependencies use version ranges in `pyproject.toml`; there is no dependency lockfile.
 
-Modules: `handlers` (menu/cart), `checkout` (FSM), `orders`/`storage` (SQLite),
-`panel` (HTTP/cache), `owner`, `events`, `privacy`, `reliability`, `config`, `texts`.
-See [DECISIONS.md](DECISIONS.md) for design choices and the
-[Russian guide](README.ru.md) for detailed behavior. Licensed under [MIT](LICENSE).
+See [design decisions](DECISIONS.md), [Telegram UX rules](docs/TELEGRAM_UX.md) and the [live acceptance checklist](docs/DEPLOY.md). Mock tests do not measure Telegram latency or verify a running panel.

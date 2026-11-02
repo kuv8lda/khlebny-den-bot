@@ -15,21 +15,27 @@ from aiogram.types import (
 from . import cart as cart_logic
 from . import texts
 from .catalog import CATALOG, get_item
+from .ui import page_slice
 
 router = Router()
 
 
-class MenuCb(CallbackData, prefix="m"):
+class MenuCb(CallbackData, prefix="m2"):
     item_id: int
 
 
-class CartCb(CallbackData, prefix="c"):
+class MenuPageCb(CallbackData, prefix="mp"):
+    page: int
+
+
+class CartCb(CallbackData, prefix="c2"):
     action: str  # inc | dec | del | clear | noop
     item_id: int = 0
 
 
-class CheckoutCb(CallbackData, prefix="o"):
+class CheckoutCb(CallbackData, prefix="o2"):
     action: str  # start | skip | confirm | cancel
+    token: str = ""
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -45,7 +51,8 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def menu_keyboard() -> InlineKeyboardMarkup:
+def menu_keyboard(page: int = 0) -> InlineKeyboardMarkup:
+    items, page, pages = page_slice(CATALOG, page, 5)
     rows = [
         [
             InlineKeyboardButton(
@@ -55,9 +62,25 @@ def menu_keyboard() -> InlineKeyboardMarkup:
                 callback_data=MenuCb(item_id=item["id"]).pack(),
             )
         ]
-        for item in CATALOG
+        for item in items
     ]
+    nav = []
+    for label, target in ((texts.BTN_PREV, page - 1), (texts.BTN_NEXT, page + 1)):
+        if 0 <= target < pages:
+            nav.append(
+                InlineKeyboardButton(text=label, callback_data=MenuPageCb(page=target).pack())
+            )
+    if nav:
+        rows.append(nav)
+    rows.append([_btn(texts.BTN_OPEN_CART, "open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def menu_text(page: int = 0) -> str:
+    if not CATALOG:
+        return texts.MENU_EMPTY
+    _, page, pages = page_slice(CATALOG, page, 5)
+    return texts.MENU_TITLE + "\n" + texts.PAGE.format(page=page + 1, pages=pages)
 
 
 def _btn(text: str, action: str, item_id: int = 0) -> InlineKeyboardButton:
@@ -66,10 +89,12 @@ def _btn(text: str, action: str, item_id: int = 0) -> InlineKeyboardButton:
     )
 
 
-def render_cart(cart: cart_logic.Cart) -> tuple[str, InlineKeyboardMarkup | None]:
+def render_cart(cart: cart_logic.Cart, page: int = 0) -> tuple[str, InlineKeyboardMarkup | None]:
     lines: list[str] = []
     rows: list[list[InlineKeyboardButton]] = []
-    for key, qty in cart.items():
+    entries = [(key, qty) for key, qty in cart.items() if get_item(key) is not None]
+    visible, page, pages = page_slice(entries, page, 2)
+    for key, qty in visible:
         item = get_item(key)
         if item is None:
             continue
@@ -88,9 +113,26 @@ def render_cart(cart: cart_logic.Cart) -> tuple[str, InlineKeyboardMarkup | None
             ]
         )
     if not lines:
-        return texts.CART_EMPTY, None
+        return texts.CART_EMPTY, InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=texts.BTN_BROWSE, callback_data=MenuPageCb(page=0).pack()
+                    )
+                ]
+            ]
+        )
     total = cart_logic.format_rub(cart_logic.total_cents(cart))
-    text = "\n".join([texts.CART_TITLE, "", *lines, "", texts.CART_TOTAL.format(total=total)])
+    title = texts.CART_TITLE
+    if pages > 1:
+        title += " · " + texts.PAGE.format(page=page + 1, pages=pages)
+    text = "\n".join([title, *lines, texts.CART_TOTAL.format(total=total)])
+    nav = []
+    for label, target in ((texts.BTN_PREV, page - 1), (texts.BTN_NEXT, page + 1)):
+        if 0 <= target < pages:
+            nav.append(_btn(label, "page", target))
+    if nav:
+        rows.append(nav)
     rows.append([_btn(texts.BTN_CLEAR, "clear")])
     rows.append(
         [
@@ -137,14 +179,28 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 @router.message(Command("menu"))
 @router.message(F.text == texts.BTN_MENU)
 async def cmd_menu(message: Message) -> None:
-    await message.answer(texts.MENU_TITLE, reply_markup=menu_keyboard())
+    await message.answer(menu_text(), reply_markup=menu_keyboard())
 
 
 @router.message(Command("cart"))
 @router.message(F.text == texts.BTN_CART)
 async def cmd_cart(message: Message, state: FSMContext) -> None:
+    await state.update_data(cart_page=0)
     text, markup = render_cart(await load_cart(state))
     await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(MenuPageCb.filter())
+async def on_menu_page(callback: CallbackQuery, callback_data: MenuPageCb) -> None:
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_text(
+                menu_text(callback_data.page), reply_markup=menu_keyboard(callback_data.page)
+            )
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in exc.message:
+                raise
 
 
 @router.callback_query(MenuCb.filter())
@@ -162,14 +218,19 @@ async def on_add(callback: CallbackQuery, callback_data: MenuCb, state: FSMConte
 
 
 @router.callback_query(CartCb.filter())
-async def on_cart_action(
-    callback: CallbackQuery, callback_data: CartCb, state: FSMContext
-) -> None:
+async def on_cart_action(callback: CallbackQuery, callback_data: CartCb, state: FSMContext) -> None:
     action = callback_data.action
     if action == "noop":
         await callback.answer()
         return
+    if action == "open":
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            text, markup = render_cart(await load_cart(state))
+            await callback.message.answer(text, reply_markup=markup)
+        return
     cart = await load_cart(state)
+    page = (await state.get_data()).get("cart_page", 0)
     item_id = callback_data.item_id
     if action in ("inc", "dec"):
         new_qty = cart.get(str(item_id), 0) + (1 if action == "inc" else -1)
@@ -185,12 +246,14 @@ async def on_cart_action(
         cart_logic.remove_item(cart, item_id)
     elif action == "clear":
         cart_logic.clear(cart)
-    await state.update_data(cart=cart)
+    elif action == "page":
+        page = item_id
+    await state.update_data(cart=cart, cart_page=page)
+    await callback.answer()
 
     if isinstance(callback.message, Message):
-        text, markup = render_cart(cart)
+        text, markup = render_cart(cart, page)
         try:
             await callback.message.edit_text(text, reply_markup=markup)
         except TelegramBadRequest:
             pass  # "message is not modified"
-    await callback.answer()
