@@ -1,0 +1,38 @@
+# Secrets and runtime data
+.env
+.env.*
+!.env.example
+data/
+instance/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Python environments and generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local tools, generated context and scratch work
+.kiro/
+.claude/
+.playwright-mcp/
+.rtt/
+.rtt-cache/
+_bg/
+_optimizer/
+/skills-lock.json
+/TASK.md
+
+# Downloaded design references (not application assets)
+/behance-flow-module.png
+/behance-structure-reference.png
+/dribbble-chat-reference.png
