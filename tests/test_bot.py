@@ -20,6 +20,33 @@ async def test_start_shows_buttons_and_demo_note():
     assert labels == [texts.BTN_MENU, texts.BTN_CART, texts.BTN_ORDERS]
 
 
+async def test_owner_sees_admin_button_and_link():
+    msg = make_message(user_id=10)
+    await h.cmd_start(msg, frozenset({10}))
+    labels = [b.text for row in msg.answer.call_args.kwargs["reply_markup"].keyboard for b in row]
+    assert texts.BTN_ADMIN in labels
+    msg.answer.reset_mock()
+    await h.cmd_admin(msg, frozenset({10}))
+    assert msg.answer.call_args.args[0] == texts.ADMIN_PANEL_LINK
+    button = msg.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == texts.BTN_OPEN_ADMIN
+    assert button.url == "https://panel.kuv8lda.dev"
+
+
+async def test_admin_link_is_not_shared_with_non_owner_or_group():
+    msg = make_message(user_id=11)
+    await h.cmd_admin(msg, frozenset({10}))
+    msg.answer.assert_not_awaited()
+    msg = make_message(user_id=10)
+    msg.chat.type = "group"
+    await h.cmd_start(msg, frozenset({10}))
+    labels = [b.text for row in msg.answer.call_args.kwargs["reply_markup"].keyboard for b in row]
+    assert texts.BTN_ADMIN not in labels
+    msg.answer.reset_mock()
+    await h.cmd_admin(msg, frozenset({10}))
+    msg.answer.assert_not_awaited()
+
+
 async def test_menu_shows_five_items_with_prices_and_navigation():
     msg = make_message()
     await h.cmd_menu(msg)

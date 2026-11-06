@@ -24,10 +24,21 @@ class Settings(BaseSettings):
     panel_api_key: SecretStr = SecretStr("")
     panel_timeout_seconds: float = 5
     catalog_ttl_seconds: float = 60
+    catalog_push_token: SecretStr = SecretStr("")
+    catalog_push_host: str = "127.0.0.1"
+    catalog_push_port: int = Field(default=8081, ge=1, le=65535)
     events_poll_interval: float = Field(default=5, gt=0, allow_inf_nan=False)
 
     # Telegram ID владельцев через запятую. Пусто: уведомлений и команды /owner нет.
     owner_telegram_ids: str = ""
+
+    @field_validator("catalog_push_token")
+    @classmethod
+    def _check_push_token(cls, value: SecretStr) -> SecretStr:
+        token = value.get_secret_value()
+        if token and len(token.encode()) < 32:
+            raise ValueError("CATALOG_PUSH_TOKEN must be at least 32 bytes")
+        return value
 
     @field_validator("owner_telegram_ids")
     @classmethod

@@ -40,7 +40,9 @@ Set these variables in the environment or `.env` (gitignored):
 | `PANEL_API_KEY` | Empty | Bearer token; leave empty to disable integration |
 | `PANEL_TIMEOUT_SECONDS` | `5` | Timeout per panel request attempt |
 | `EVENTS_POLL_INTERVAL` | `5` | Event and competitor-price polling interval, seconds; must be positive and finite |
-| `CATALOG_TTL_SECONDS` | `60` | Catalogue cache TTL, seconds |
+| `CATALOG_PUSH_TOKEN` | empty | Shared push secret, at least 32 bytes |
+| `CATALOG_PUSH_HOST` / `CATALOG_PUSH_PORT` | `127.0.0.1` / `8081` | Catalogue HTTP receiver address |
+| `CATALOG_TTL_SECONDS` | `60` | TTL for the standalone `CatalogProvider`, seconds; not used by push updates |
 | `OWNER_TELEGRAM_IDS` | Empty | Comma-separated owner IDs, e.g. `123,456`; invalid values stop startup |
 
 The bot logs at `INFO`; startup does not use the `LOG_LEVEL` setting.
@@ -68,7 +70,7 @@ Owner commands require an ID in `OWNER_TELEGRAM_IDS` and do not appear in the pu
 
 The offline catalogue contains 20 demo products shared with the panel. Product ID 7 is retired.
 
-With integration enabled, the bot loads the panel catalogue before polling. If the request fails, startup fails to avoid sending orders with stale product IDs. Restart the bot after changing the panel's prices or assortment. Catalogue changes clear unfinished carts and checkouts; saved orders keep their snapshots. Open `/menu` to replace old buttons.
+With integration enabled, the bot loads the panel catalogue once at startup. The panel pushes new versions to the bot's HTTP receiver when the catalogue changes; there is no periodic catalogue polling. Configure a shared `CATALOG_PUSH_TOKEN` and the bot address in the panel. During an outage the bot retains the last received prices, including after a restart; if no catalogue has been saved yet, it uses the built-in one. Catalogue changes clear unfinished carts and checkouts; saved orders keep their snapshots. Open `/menu` to replace old buttons.
 
 ## Panel integration
 

@@ -4,6 +4,20 @@ from helpers import make_state
 from khlebny_bot.storage import SqliteStorage
 
 
+async def test_saved_catalog_survives_restart(tmp_path):
+    path = tmp_path / "fsm.sqlite3"
+    storage = SqliteStorage(path)
+    assert await storage.load_catalog() is None
+    catalog = [{"id": 1, "name": "Хлеб", "price_cents": 12345}]
+    await storage.sync_catalog(catalog)
+    await storage.close()
+    storage = SqliteStorage(path)
+    try:
+        assert await storage.load_catalog() == catalog
+    finally:
+        await storage.close()
+
+
 async def test_catalog_sync_clears_legacy_cart_once(tmp_path):
     storage = SqliteStorage(tmp_path / "fsm.sqlite3")
     try:

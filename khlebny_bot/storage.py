@@ -31,15 +31,30 @@ class SqliteStorage(BaseStorage):
                 # Возраст старых записей неизвестен: дать им полный срок хранения.
                 self._conn.execute("UPDATE fsm SET updated_at=?", (time.time(),))
 
-    def _sync_catalog(self, catalog: list[dict]) -> None:
+    def _sync_catalog(self, catalog: list[dict], version: int | None = None) -> bool:
         signature = json.dumps(catalog, ensure_ascii=False, sort_keys=True)
         with self._lock, self._conn:
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS catalog_meta (id INTEGER PRIMARY KEY, signature TEXT)"
             )
+            if version is not None:
+                self._conn.execute(
+                    "CREATE TABLE IF NOT EXISTS catalog_version "
+                    "(id INTEGER PRIMARY KEY, version INTEGER)"
+                )
+                row = self._conn.execute(
+                    "SELECT version FROM catalog_version WHERE id=1"
+                ).fetchone()
+                if row is not None and version <= row[0]:
+                    return False
+                self._conn.execute(
+                    "INSERT INTO catalog_version(id,version) VALUES(1,?) "
+                    "ON CONFLICT(id) DO UPDATE SET version=excluded.version",
+                    (version,),
+                )
             old = self._conn.execute("SELECT signature FROM catalog_meta WHERE id=1").fetchone()
             if old is not None and old[0] == signature:
-                return
+                return True
             # Old item IDs can refer to entirely different products after a sync.
             for key, raw in self._conn.execute("SELECT key,data FROM fsm").fetchall():
                 data = json.loads(raw)
@@ -51,12 +66,40 @@ class SqliteStorage(BaseStorage):
                 )
             self._conn.execute(
                 "INSERT INTO catalog_meta(id,signature) VALUES(1,?) "
-                "ON CONFLICT(id) DO UPDATE SET signature=excluded.signature", (signature,),
+                "ON CONFLICT(id) DO UPDATE SET signature=excluded.signature",
+                (signature,),
             )
+            return True
+
+    async def load_catalog(self) -> list[dict] | None:
+        """Вернуть последний синхронизированный каталог, если он сохранён и корректен."""
+        from .panel import PanelError, parse_catalog
+
+        def load() -> str | None:
+            with self._lock:
+                exists = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_meta'"
+                ).fetchone()
+                if not exists:
+                    return None
+                row = self._conn.execute("SELECT signature FROM catalog_meta WHERE id=1").fetchone()
+                return row[0] if row else None
+
+        raw = await asyncio.to_thread(load)
+        if raw is None:
+            return None
+        try:
+            return parse_catalog(json.loads(raw))
+        except (ValueError, PanelError):
+            return None
 
     async def sync_catalog(self, catalog: list[dict]) -> None:
         """Сбросить незавершённые корзины при смене каталога; заказы не трогать."""
         await asyncio.to_thread(self._sync_catalog, catalog)
+
+    async def sync_catalog_version(self, catalog: list[dict], version: int) -> bool:
+        """Атомарно применить только более новую версию панели."""
+        return await asyncio.to_thread(self._sync_catalog, catalog, version)
 
     def _key(self, key: StorageKey) -> str:
         return self._keys.build(key, "data")

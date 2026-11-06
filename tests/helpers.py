@@ -21,7 +21,7 @@ def make_message(text: str | None = None, user_id: int = 1) -> MagicMock:
     msg.edit_reply_markup = AsyncMock()
     msg.bot = SimpleNamespace(id=1, send_chat_action=AsyncMock())
     msg.text = text
-    msg.chat = SimpleNamespace(id=user_id)
+    msg.chat = SimpleNamespace(id=user_id, type="private")
     msg.message_thread_id = None
     msg.from_user = SimpleNamespace(id=user_id)
     return msg

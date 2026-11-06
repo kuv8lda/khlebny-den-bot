@@ -37,6 +37,14 @@ async def test_fetch_sends_bearer_and_parses_bare_array(client):
 
 
 @respx.mock
+async def test_fetch_versioned_catalog(client):
+    respx.get(f"{BASE}/api/integrations/catalog-versioned").mock(
+        return_value=httpx.Response(200, json={"catalog": PANEL_ITEMS, "version": 42})
+    )
+    assert await client.fetch_catalog_versioned() == (PANEL_ITEMS, 42)
+
+
+@respx.mock
 @pytest.mark.parametrize("status", [401, 404, 500])
 async def test_http_error_becomes_panel_error(client, status):
     respx.get(URL).mock(return_value=httpx.Response(status))
@@ -110,6 +118,22 @@ async def test_provider_falls_back_when_panel_down(client):
     respx.get(URL).mock(return_value=httpx.Response(500))
     provider = CatalogProvider(client, CATALOG, ttl_seconds=60, clock=FakeClock())
     assert await provider.get() == CATALOG
+
+
+@respx.mock
+async def test_provider_recovers_after_fallback_ttl(client):
+    route = respx.get(URL).mock(return_value=httpx.Response(500))
+    clock = FakeClock()
+    provider = CatalogProvider(client, CATALOG, ttl_seconds=60, clock=clock)
+    assert await provider.get() == CATALOG
+    attempts = route.call_count
+    route.mock(return_value=httpx.Response(200, json=PANEL_ITEMS))
+    clock.now = 59
+    assert await provider.get() == CATALOG
+    assert route.call_count == attempts
+    clock.now = 60
+    assert await provider.get() == PANEL_ITEMS
+    assert route.call_count == attempts + 1
 
 
 @respx.mock
