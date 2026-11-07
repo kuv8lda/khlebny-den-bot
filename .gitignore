@@ -31,6 +31,7 @@ _optimizer/
 /skills-lock.json
 /TASK.md
 ./git
+./github
 
 # Downloaded design references (not application assets)
 /behance-flow-module.png
