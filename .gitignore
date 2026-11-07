@@ -9,6 +9,7 @@ instance/
 *.sqlite3-wal
 
 # Python environments and generated files
+./claude
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -22,8 +23,6 @@ dist/
 htmlcov/
 
 # Local tools, generated context and scratch work
-.kiro/
-.claude/
 .playwright-mcp/
 .rtt/
 .rtt-cache/
@@ -31,6 +30,7 @@ _bg/
 _optimizer/
 /skills-lock.json
 /TASK.md
+./git
 
 # Downloaded design references (not application assets)
 /behance-flow-module.png
