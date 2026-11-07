@@ -38,23 +38,13 @@ class CheckoutCb(CallbackData, prefix="o2"):
     token: str = ""
 
 
-def main_keyboard(*, is_owner: bool = False) -> ReplyKeyboardMarkup:
+def main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[
         KeyboardButton(text=texts.BTN_MENU),
         KeyboardButton(text=texts.BTN_CART),
         KeyboardButton(text=texts.BTN_ORDERS),
-    ]]
-    if is_owner:
-        keyboard.append([KeyboardButton(text=texts.BTN_ADMIN)])
+    ], [KeyboardButton(text=texts.BTN_ADMIN)]]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-
-
-def is_private_owner(message: Message, owner_ids: frozenset[int]) -> bool:
-    return bool(
-        message.chat.type == "private"
-        and message.from_user
-        and message.from_user.id in owner_ids
-    )
 
 
 def menu_keyboard(page: int = 0) -> InlineKeyboardMarkup:
@@ -166,17 +156,13 @@ async def reset_fsm(state: FSMContext, *, clear_cart: bool = False) -> None:
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, owner_ids: frozenset[int] = frozenset()) -> None:
-    await message.answer(
-        texts.START, reply_markup=main_keyboard(is_owner=is_private_owner(message, owner_ids))
-    )
+async def cmd_start(message: Message) -> None:
+    await message.answer(texts.START, reply_markup=main_keyboard())
 
 
 @router.message(Command("admin"))
 @router.message(F.text == texts.BTN_ADMIN)
-async def cmd_admin(message: Message, owner_ids: frozenset[int]) -> None:
-    if not is_private_owner(message, owner_ids):
-        return
+async def cmd_admin(message: Message) -> None:
     markup = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=texts.BTN_OPEN_ADMIN, url="https://panel.kuv8lda.dev")
     ]])
@@ -189,14 +175,10 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(
-    message: Message, state: FSMContext, owner_ids: frozenset[int] = frozenset()
-) -> None:
-    # Сбрасываем состояние и данные оформления, корзину сохраняем. См. DECISIONS.md.
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    # Сбрасываем состояние и данные оформления. Корзину сохраняем. См. DECISIONS.md.
     await reset_fsm(state)
-    await message.answer(
-        texts.CANCELLED, reply_markup=main_keyboard(is_owner=is_private_owner(message, owner_ids))
-    )
+    await message.answer(texts.CANCELLED, reply_markup=main_keyboard())
 
 
 @router.message(Command("menu"))

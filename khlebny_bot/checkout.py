@@ -440,6 +440,7 @@ async def on_confirm(
     orders: OrdersRepo,
     panel_client: PanelClient | None = None,
     owner_notifier: Callable[[Order], Awaitable[None]] | None = None,
+    owner_ids: frozenset[int] = frozenset(),
 ) -> None:
     if not await _current_checkout(callback, state, "confirm"):
         return
@@ -460,7 +461,7 @@ async def on_confirm(
             items,
             token,
             pending_panel_sync=panel_client is not None,
-            enforce_rate_limit=True,
+            enforce_rate_limit=callback.from_user.id not in owner_ids,
         )
     except OrderRateLimitError:
         if isinstance(callback.message, Message):
