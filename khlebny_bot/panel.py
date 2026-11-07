@@ -166,6 +166,22 @@ class PanelClient:
             raise PanelError("duplicate competitor product prices")
         return prices
 
+    async def fetch_catalog_versioned(self) -> tuple[list[dict], int]:
+        try:
+            response = await self._request("GET", "/api/integrations/catalog-versioned")
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("invalid payload")
+            version = payload.get("version")
+            if type(version) is not int or not 0 < version <= 2**63 - 1:
+                raise ValueError("invalid version")
+            return parse_catalog(payload.get("catalog")), version
+        except httpx.HTTPError as exc:
+            raise PanelError("versioned catalog request failed") from exc
+        except ValueError as exc:
+            raise PanelError("invalid versioned catalog") from exc
+
     async def fetch_catalog(self) -> list[dict]:
         try:
             response = await self._request("GET", CATALOG_PATH)

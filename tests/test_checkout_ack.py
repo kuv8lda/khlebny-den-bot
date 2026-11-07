@@ -71,6 +71,35 @@ async def test_confirm_ack_precedes_storage_and_panel(tmp_path, monkeypatch, fai
         await orders.close()
 
 
+@pytest.mark.parametrize("is_owner", [False, True])
+async def test_confirm_order_limit_owner_exemption(tmp_path, is_owner):
+    orders = OrdersRepo(tmp_path / "orders.db")
+    try:
+        for number in range(6):
+            state = make_state()
+            await state.update_data(
+                cart={"1": 1},
+                checkout={
+                    "token": f"token-{number}",
+                    "name": "Аня",
+                    "items": [vars(OrderItem(1, "Медовик", 240000, 1))],
+                },
+            )
+            await state.set_state(co.Checkout.confirm)
+            cb = await make_checkout_callback(state, "confirm")
+            await co.on_confirm(
+                cb, state, orders, owner_ids=frozenset({1}) if is_owner else frozenset()
+            )
+            if number == 5 and not is_owner:
+                cb.message.answer.assert_awaited_once_with(texts.ORDER_RATE_LIMIT)
+                assert await state.get_state() == co.Checkout.confirm.state
+            else:
+                cb.message.answer.assert_not_awaited()
+        assert len(await orders.list_for_user(1, limit=10)) == (6 if is_owner else 5)
+    finally:
+        await orders.close()
+
+
 async def test_confirm_rate_limit_uses_message_after_ack():
     state = make_state()
     checkout = {

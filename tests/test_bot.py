@@ -17,7 +17,28 @@ async def test_start_shows_buttons_and_demo_note():
     markup = kwargs["reply_markup"]
     assert isinstance(markup, ReplyKeyboardMarkup)
     labels = [b.text for row in markup.keyboard for b in row]
-    assert labels == [texts.BTN_MENU, texts.BTN_CART, texts.BTN_ORDERS]
+    assert labels == [texts.BTN_MENU, texts.BTN_CART, texts.BTN_ORDERS, texts.BTN_ADMIN]
+
+
+async def test_users_see_admin_button_and_link():
+    for user_id in (10, 11):
+        msg = make_message(user_id=user_id)
+        await h.cmd_start(msg)
+        labels = [b.text for row in msg.answer.call_args.kwargs["reply_markup"].keyboard for b in row]
+        assert texts.BTN_ADMIN in labels
+        msg.answer.reset_mock()
+        await h.cmd_admin(msg)
+        assert msg.answer.call_args.args[0] == texts.ADMIN_PANEL_LINK
+        button = msg.answer.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert button.text == texts.BTN_OPEN_ADMIN
+        assert button.url == "https://panel.kuv8lda.dev"
+
+
+async def test_cancel_keeps_admin_button():
+    msg = make_message(user_id=11)
+    await h.cmd_cancel(msg, make_state())
+    labels = [b.text for row in msg.answer.call_args.kwargs["reply_markup"].keyboard for b in row]
+    assert texts.BTN_ADMIN in labels
 
 
 async def test_menu_shows_five_items_with_prices_and_navigation():

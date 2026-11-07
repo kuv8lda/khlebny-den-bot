@@ -6,9 +6,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand
+from aiohttp import web
 
 from . import texts
 from .catalog import CATALOG
+from .catalog_push import create_catalog_app
 from .checkout import router as checkout_router
 from .competitor import CompetitorRepo, CompetitorWorker
 from .competitor import router as competitor_router
@@ -18,7 +20,7 @@ from .handlers import router
 from .orders import OrdersRepo
 from .owner import notify_owners
 from .owner import router as owner_router
-from .panel import PanelClient
+from .panel import PanelClient, PanelError
 from .privacy import CleanupWorker
 from .privacy import router as privacy_router
 from .reliability import TrafficMiddleware
@@ -129,11 +131,35 @@ async def main() -> None:
     cleanup = CleanupWorker(storage, orders=orders)
     cleanup_task = None
     worker_task = None
+    catalog_runner = None
     try:
+        push_token = settings.catalog_push_token.get_secret_value()
+        saved_catalog = await storage.load_catalog() if push_token else None
+        if saved_catalog is not None:
+            CATALOG[:] = saved_catalog
         if panel_client is not None:
-            # Stale product IDs may point to different products.
-            CATALOG[:] = await panel_client.fetch_catalog()
+            try:
+                if push_token:
+                    catalog, version = await panel_client.fetch_catalog_versioned()
+                    if await storage.sync_catalog_version(catalog, version):
+                        CATALOG[:] = catalog
+                else:
+                    CATALOG[:] = await panel_client.fetch_catalog()
+            except PanelError:
+                if saved_catalog is None:
+                    saved_catalog = await storage.load_catalog()
+                if saved_catalog is None:
+                    logging.warning("panel unavailable at startup, using fallback catalog")
+                else:
+                    CATALOG[:] = saved_catalog
+                    logging.warning("panel unavailable at startup, using last saved catalog")
         await storage.sync_catalog(CATALOG)
+        if push_token:
+            catalog_runner = web.AppRunner(create_catalog_app(storage, push_token), access_log=None)
+            await catalog_runner.setup()
+            await web.TCPSite(
+                catalog_runner, settings.catalog_push_host, settings.catalog_push_port
+            ).start()
         await set_commands_with_retry(bot)
         cleanup_task = asyncio.create_task(cleanup.run(), name="privacy-cleanup")
         if worker is not None:
@@ -143,6 +169,8 @@ async def main() -> None:
         await dp.start_polling(bot, close_bot_session=False)
     finally:
         try:
+            if catalog_runner is not None:
+                await catalog_runner.cleanup()
             await traffic.drain()
             cleanup.stop()
             if cleanup_task is not None:

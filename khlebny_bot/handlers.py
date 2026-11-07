@@ -39,16 +39,12 @@ class CheckoutCb(CallbackData, prefix="o2"):
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text=texts.BTN_MENU),
-                KeyboardButton(text=texts.BTN_CART),
-                KeyboardButton(text=texts.BTN_ORDERS),
-            ]
-        ],
-        resize_keyboard=True,
-    )
+    keyboard = [[
+        KeyboardButton(text=texts.BTN_MENU),
+        KeyboardButton(text=texts.BTN_CART),
+        KeyboardButton(text=texts.BTN_ORDERS),
+    ], [KeyboardButton(text=texts.BTN_ADMIN)]]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def menu_keyboard(page: int = 0) -> InlineKeyboardMarkup:
@@ -164,6 +160,15 @@ async def cmd_start(message: Message) -> None:
     await message.answer(texts.START, reply_markup=main_keyboard())
 
 
+@router.message(Command("admin"))
+@router.message(F.text == texts.BTN_ADMIN)
+async def cmd_admin(message: Message) -> None:
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.BTN_OPEN_ADMIN, url="https://panel.kuv8lda.dev")
+    ]])
+    await message.answer(texts.ADMIN_PANEL_LINK, reply_markup=markup)
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     await message.answer(texts.HELP)
@@ -171,7 +176,7 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    # Сбрасываем состояние и данные оформления, корзину сохраняем. См. DECISIONS.md.
+    # Сбрасываем состояние и данные оформления. Корзину сохраняем. См. DECISIONS.md.
     await reset_fsm(state)
     await message.answer(texts.CANCELLED, reply_markup=main_keyboard())
 
