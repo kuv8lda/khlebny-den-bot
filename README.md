@@ -1,9 +1,9 @@
 # Bread day: Telegram Bot
 
+A working demo bakery bot built with Python and aiogram 3. The bot takes orders through Telegram and connects to the separate orders-admin-panel: it sends orders and receives status events and the product catalog. The bot uses long polling and stores data in SQLite. Payments and delivery are not included in the demo.
+
 # Bot + panel demonstration
 https://github.com/user-attachments/assets/37505b09-64de-4109-abb0-cb2a4fc5f432
-
-A working demo bakery bot built with Python and aiogram 3. The bot takes orders through Telegram and connects to the separate orders-admin-panel: it sends orders and receives status events and the product catalog. The bot uses long polling and stores data in SQLite. Payments and delivery are not included in the demo.
 
 ## Getting started
 
