@@ -1,12 +1,13 @@
-# Хлебный день: Telegram-бот
+# Bread day: Telegram Bot
 
-[![CI](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml)
+# Bot + panel demonstration
+https://github.com/user-attachments/assets/37505b09-64de-4109-abb0-cb2a4fc5f432
 
-Работающий демо-бот пекарни на Python и aiogram 3. Бот принимает заказы через Telegram и связывается с отдельной админ-панелью orders-admin-panel: отправляет заказы, получает события о статусах и каталог товаров. Бот использует long polling и хранит данные в SQLite. Оплаты и доставки в демо нет.
+A working demo bakery bot built with Python and aiogram 3. The bot takes orders through Telegram and connects to the separate orders-admin-panel: it sends orders and receives status events and the product catalog. The bot uses long polling and stores data in SQLite. Payments and delivery are not included in the demo.
 
-## Запуск
+## Getting started
 
-Понадобятся Python 3.11+, токен от [@BotFather](https://t.me/BotFather) и доступ к Telegram API.
+You need Python 3.11+, a token from [@BotFather](https://t.me/BotFather), and access to the Telegram API.
 
 ```bash
 python3 -m venv .venv
@@ -15,63 +16,63 @@ pip install -e .
 cp .env.example .env
 ```
 
-Укажите `BOT_TOKEN` в `.env`. Для работы с панелью задайте её адрес и ключ, затем запустите бота:
+Set `BOT_TOKEN` in `.env`. To connect to the panel, set its address and API key, then start the bot:
 
 ```bash
 python -m khlebny_bot.main
 ```
 
-## Команды
+## Commands
 
-| Команда | Действие |
+| Command | Action |
 |---|---|
-| `/start` | Открыть главное меню |
-| `/menu` | Посмотреть товары и добавить их в корзину |
-| `/cart` | Изменить корзину или перейти к оформлению |
-| `/orders` | Посмотреть последние пять заказов |
-| `/help` | Получить справку по командам |
-| `/cancel` | Отменить оформление и сохранить корзину |
-| `/privacy` | Прочитать политику хранения данных |
-| `/forget` | Удалить локальные данные и запросить анонимизацию в панели |
-| `/admin` | Получить ссылку на админ-панель |
-| `/owner` | Посмотреть сводку заказов владельца |
-| `/competitor` | Посмотреть цены конкурентов из панели |
+| `/start` | Open the main menu |
+| `/menu` | Browse products and add them to the cart |
+| `/cart` | Edit the cart or proceed to checkout |
+| `/orders` | View the last five orders |
+| `/help` | Get help with commands |
+| `/cancel` | Cancel checkout and keep the cart |
+| `/privacy` | Read the data retention policy |
+| `/forget` | Delete local data and request anonymization in the panel |
+| `/admin` | Get a link to the admin panel |
+| `/owner` | View the owner's order summary |
+| `/competitor` | View competitor prices from the panel |
 
-Команды `/owner` и `/competitor` доступны владельцам из `OWNER_TELEGRAM_IDS`. Команда `/admin` доступна любому пользователю и ведёт на адрес `https://panel.kuv8lda.dev`, заданный в коде. Доступ к самой панели контролирует панель. Адрес ссылки не зависит от `PANEL_BASE_URL`.
+The `/owner` and `/competitor` commands are available to owners listed in `OWNER_TELEGRAM_IDS`. The `/admin` command is available to all users and links to `https://panel.kuv8lda.dev`, which is hard-coded. Access to the panel itself is controlled by the panel. The link address is independent of `PANEL_BASE_URL`.
 
-## Сценарии использования
+## Usage
 
-### Клиент
+### Customer
 
-1. Отправьте `/start`, откройте `/menu` и добавьте товары в корзину.
-2. В `/cart` проверьте количество товаров и начните оформление. Укажите имя и при желании комментарий, затем подтвердите заказ.
-3. Бот сохранит заказ и отправит его в панель при включённой интеграции. Если отправка не удалась, повторите её кнопкой в сообщении или в деталях заказа через `/orders`.
-4. После смены статуса в панели бот отправит уведомление в Telegram.
+1. Send `/start`, open `/menu`, and add products to the cart.
+2. In `/cart`, check the quantities and start checkout. Enter your name and optionally a comment, then confirm the order.
+3. The bot saves the order and sends it to the panel if the integration is enabled. If sending fails, retry using the button in the message or in the order details under `/orders`.
+4. When the status changes in the panel, the bot sends a Telegram notification.
 
-### Владелец
+### Owner
 
-1. Добавьте свой Telegram ID в `OWNER_TELEGRAM_IDS` и отправьте боту `/start`, чтобы получать сообщения.
-2. При новом заказе бот отправит карточку. Для заказа, связанного с панелью, используйте кнопки карточки для смены статуса: `pending` → `paid` → `shipped` → `completed`. Заказ в статусе `pending` или `paid` можно отменить.
-3. Отправьте `/owner` для сводки или `/admin`, чтобы открыть ссылку на панель. При конфликте статусов проверьте заказ в панели.
+1. Add your Telegram ID to `OWNER_TELEGRAM_IDS` and send `/start` to the bot to receive messages.
+2. The bot sends an order card when a new order arrives. For an order linked to the panel, use the card buttons to change its status: `pending` → `paid` → `shipped` → `completed`. An order with the status `pending` or `paid` can be cancelled.
+3. Send `/owner` for a summary or `/admin` to open the panel link. If there is a status conflict, check the order in the panel.
 
-## Настройки окружения
+## Environment settings
 
-Задайте переменные в окружении или в файле `.env`. Не добавляйте `.env` в репозиторий и не передавайте ключи третьим лицам.
+Set variables in the environment or in the `.env` file. Do not commit `.env` to the repository or share keys with third parties.
 
-| Переменная | Значение |
+| Variable | Value |
 |---|---|
-| `BOT_TOKEN` | Обязательный токен Telegram-бота от @BotFather. |
-| `PANEL_BASE_URL` | Адрес панели, доступный боту. По умолчанию `http://127.0.0.1:5000`. Для удалённой панели используйте HTTPS. |
-| `PANEL_API_KEY` | Ключ Bearer для API панели. Пустое значение отключает интеграцию; бот использует встроенный каталог. |
-| `OWNER_TELEGRAM_IDS` | Telegram ID владельцев через запятую, например `123,456`. Пустое значение оставляет список владельцев пустым. |
+| `BOT_TOKEN` | Required Telegram bot token from @BotFather. |
+| `PANEL_BASE_URL` | Panel address accessible to the bot. Defaults to `http://127.0.0.1:5000`. Use HTTPS for a remote panel. |
+| `PANEL_API_KEY` | Bearer token for the panel API. An empty value disables the integration; the bot uses the built-in catalog. |
+| `OWNER_TELEGRAM_IDS` | Comma-separated Telegram IDs of owners, for example `123,456`. An empty value leaves the owner list empty. |
 
-Остальные параметры находятся в `.env.example`. Для обновления каталога через push задайте `CATALOG_PUSH_TOKEN` на стороне бота и панели, а также адрес приёмника бота в настройках панели. Без push бот получает каталог при запуске. При недоступности панели бот использует сохранённый каталог или встроенный, если сохранённого нет.
+Other settings are listed in `.env.example`. To update the catalog via push, set `CATALOG_PUSH_TOKEN` on both the bot and the panel, and set the bot's receiver address in the panel settings. Without push, the bot fetches the catalog at startup. If the panel is unavailable, the bot uses the saved catalog, or the built-in catalog if no saved catalog exists.
 
-## Запуск на сервере
+## Running on a server
 
-Установите проект в виртуальное окружение и настройте `.env`, как в разделе «Запуск». Создайте пользователя `khlebny`, дайте ему доступ на чтение к проекту и `.env` и на запись в каталог `data`. Установите права `600` на `.env`.
+Install the project in a virtual environment and configure `.env` as described in Getting started. Create a `khlebny` user, give it read access to the project and `.env` and write access to the `data` directory. Set permissions on `.env` to `600`.
 
-Создайте `/etc/systemd/system/khlebny-bot.service`, заменив пути на свои:
+Create `/etc/systemd/system/khlebny-bot.service`, replacing the paths with your own:
 
 ```ini
 [Unit]
@@ -98,21 +99,24 @@ sudo systemctl status khlebny-bot
 journalctl -u khlebny-bot -f
 ```
 
-Запускайте один экземпляр бота на токен и базу SQLite. Панель требует отдельной установки. Для push каталога обеспечьте панели доступ к приёмнику бота через защищённую сеть.
+Run one bot instance per token and SQLite database. The panel requires a separate installation. For catalog push, ensure the panel can reach the bot's receiver over a secure network.
 
-## Данные и ограничения
+## Data and limitations
 
-- Бот сохраняет заказ до отправки в панель. При ошибке клиент может повторить отправку; фоновой очереди повторов нет.
-- `/forget` удаляет локальные данные клиента и запрашивает анонимизацию в панели. Панель сохраняет Telegram ID, комментарии и историю заказов. При ошибке панели повторите команду.
-- Клиент может создать до пяти заказов за скользящий час. Повторная отправка сохранённого заказа не расходует лимит.
-- Бот удаляет брошенные корзины и данные незавершённого оформления после семи дней без изменений. Заказы хранятся до команды `/forget`.
+- The bot saves an order before sending it to the panel. If sending fails, the customer can retry; there is no background retry queue.
+- `/forget` deletes the customer's local data and requests anonymization in the panel. The panel retains the Telegram ID, comments, and order history. If the panel returns an error, retry the command.
+- A customer can create up to five orders per rolling hour. Resending a saved order does not count toward the limit.
+- The bot deletes abandoned carts and unfinished checkout data after seven days without changes. Orders are retained until `/forget` is issued.
 
-## Разработка
+## Development
 
 ```bash
 pip install -e '.[dev]'
 ruff check .
 pytest -q
+```
+
+Tests use mocks and do not require network access. Additional decisions are documented in [DECISIONS.md](DECISIONS.md), and Telegram interface guidelines are in [docs/TELEGRAM_UX.md](docs/TELEGRAM_UX.md).
 ```
 
 Тесты используют моки и не требуют доступа к сети. Дополнительные решения описаны в [DECISIONS.md](DECISIONS.md), правила интерфейса Telegram: в [docs/TELEGRAM_UX.md](docs/TELEGRAM_UX.md).
