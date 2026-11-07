@@ -1,8 +1,9 @@
 # khlebny-den-bot
 
-[![CI](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kuv8lda/khlebny-den-bot/actions/workflows/ci.yml)
-
 [English](README.md) · [Развёртывание](docs/DEPLOY.md) · [MIT](LICENSE)
+
+# Демонстрация бота + панели
+https://github.com/user-attachments/assets/37505b09-64de-4109-abb0-cb2a4fc5f432
 
 Telegram-бот вымышленной пекарни «Хлебный день» на aiogram 3 и long polling. Заказы демонстрационные: пекарня их не исполняет, платежей нет.
 
