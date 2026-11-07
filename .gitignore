@@ -1,7 +1,5 @@
 # Secrets and runtime data
 .env
-.env.*
-!.env.example
 data/
 instance/
 *.sqlite3
