@@ -32,8 +32,3 @@ _optimizer/
 /TASK.md
 ./git
 ./github
-
-# Downloaded design references (not application assets)
-/behance-flow-module.png
-/behance-structure-reference.png
-/dribbble-chat-reference.png
